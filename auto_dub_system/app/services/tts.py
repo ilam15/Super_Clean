@@ -1,127 +1,93 @@
-import re
-import time
-import hashlib
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from deep_translator import GoogleTranslator
+def text_to_speech(
+    aligned_text: str,
+    start_time: float,
+    end_time: float,
+    speaker_no: str,
+    overlap: bool,
+    gender: str,
+    output_dir: str = "tts_chunks"
+):
+    """
+    INPUT:
+        aligned_text + start_time + end_time + speaker_no + overlap + gender
 
+    PROCESS:
+        Sarvam AI TTS
 
-# =========================================================
-# CONFIG
-# =========================================================
-MAX_WORKERS = 5
-RETRY_LIMIT = 3
-RETRY_DELAY = 1.2
-CACHE = {}
-CACHE_LOCK = threading.Lock()
+    OUTPUT:
+        audio_path + start_time + end_time + speaker_no + overlap
+    """
 
+    try:
+        import os
+        import uuid
+        import requests
 
-# =========================================================
-# UTILS
-# =========================================================
-def cache_key(text, src, tgt):
-    return hashlib.md5(f"{src}:{tgt}:{text}".encode()).hexdigest()
+        os.makedirs(output_dir, exist_ok=True)
 
+        # -------------------------
+        # VOICE SELECTION
+        # -------------------------
+        if gender == "female":
+            voice = "anushka"
+        elif gender == "male":
+            voice = "arjun"
+        else:
+            voice = "neutral"
 
-def detect_language(text, whisper_lang):
-    return whisper_lang or "en"
+        # -------------------------
+        # FILE PATH
+        # -------------------------
+        file_name = f"{speaker_no}_{uuid.uuid4().hex}.wav"
+        audio_path = os.path.join(output_dir, file_name)
 
+        # -------------------------
+        # SARVAM CONFIG
+        # -------------------------
+        url = "https://api.sarvam.ai/text-to-speech"
+        headers = {
+            "api-subscription-key": settings.SARVAM_API_KEY,
+            "Content-Type": "application/json"
+        }
 
-def is_noise(text):
-    return not re.search(r"[a-zA-Z\u0900-\u0D7F]", text) or len(text.strip()) < 2
+        payload = {
+            "inputs": [aligned_text],
+            "voice": voice,
+            "sample_rate": 22050,
+            "format": "wav"
+        }
 
+        # -------------------------
+        # API CALL
+        # -------------------------
+        response = requests.post(url, headers=headers, json=payload)
 
-def split_tag(text):
-    m = re.match(r'(<S:.*?\|G:.*?>)?(.*)', text, re.S)
-    return (m.group(1) or "", m.group(2).strip())
+        if response.status_code != 200:
+            raise Exception(response.text)
 
+        # -------------------------
+        # SAVE AUDIO
+        # -------------------------
+        with open(audio_path, "wb") as f:
+            f.write(response.content)
 
-def short(code):
-    return code[:2]
+        # -------------------------
+        # OUTPUT STRUCTURE
+        # -------------------------
+        return {
+            "audio_path": audio_path,
+            "start_time": round(start_time, 2),
+            "end_time": round(end_time, 2),
+            "speaker_no": speaker_no,
+            "overlap": overlap
+        }
 
-
-# =========================================================
-# RATE LIMITED GOOGLE TRANSLATOR
-# =========================================================
-def google_translate_safe(text, src, tgt):
-    key = cache_key(text, src, tgt)
-
-    with CACHE_LOCK:
-        if key in CACHE:
-            return CACHE[key]
-
-    for _ in range(RETRY_LIMIT):
-        try:
-            out = GoogleTranslator(source=src, target=tgt).translate(text)
-            with CACHE_LOCK:
-                CACHE[key] = out
-            return out
-        except:
-            time.sleep(RETRY_DELAY)
-
-    return text  # final fallback
-
-
-# =========================================================
-# BATCH TRANSLATION ENGINE
-# =========================================================
-def batch_translate(texts, src, tgt):
-    with ThreadPoolExecutor(MAX_WORKERS) as ex:
-        return list(ex.map(lambda t: google_translate_safe(t, src, tgt), texts))
-
-
-# =========================================================
-# MAIN ENTERPRISE PIPELINE
-# =========================================================
-def enterprise_translate(segments, target_lang, model_manager=None):
-
-    to_translate = []
-    indexes = []
-
-    tgt = short(target_lang)
-
-    # ---------- DECISION ENGINE ----------
-    for i, seg in enumerate(segments):
-
-        text = seg["text"]
-        lang = short(detect_language(text, seg.get("lang")))
-
-        seg["lang"] = lang
-
-        if is_noise(text) or lang == tgt:
-            seg["action"] = "KEEP"
-            continue
-
-        tag, clean = split_tag(text)
-
-        to_translate.append((tag, clean))
-        indexes.append(i)
-        seg["action"] = "TRANSLATE"
-
-    if not to_translate:
-        return segments
-
-    tags, texts = zip(*to_translate)
-
-    # ---------- LOCAL MODEL FIRST ----------
-    translated = None
-
-    if model_manager:
-        try:
-            model = model_manager.get_translator()
-            if model:
-                out = model(list(texts), src_lang="auto", tgt_lang=target_lang)
-                translated = [o["translation_text"] for o in out]
-        except:
-            translated = None
-
-    # ---------- FALLBACK ----------
-    if translated is None:
-        translated = batch_translate(texts, "auto", tgt)
-
-    # ---------- MERGE BACK ----------
-    for idx, tr, tg in zip(indexes, translated, tags):
-        segments[idx]["text"] = f"{tg} {tr}".strip()
-        segments[idx]["translated"] = True
-
-    return segments
+    except Exception as e:
+        print(f"Sarvam TTS Error: {e}")
+        return {
+            "audio_path": None,
+            "start_time": start_time,
+            "end_time": end_time,
+            "speaker_no": speaker_no,
+            "overlap": overlap
+        }

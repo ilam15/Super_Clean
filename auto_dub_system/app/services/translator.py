@@ -1,84 +1,79 @@
-import re
-from concurrent.futures import ThreadPoolExecutor
-from deep_translator import GoogleTranslator
+def translation_matcher(
+    text: str,
+    start_time: float,
+    end_time: float,
+    speaker_no: str,
+    overlap: bool,
+    gender: str
+):
+    """
+    INPUT:
+        text, start_time, end_time, speaker_no, overlap, gender
 
+    PROCESS:
+        - word count check
+        - timestamp alignment
+        - overflow correction
 
-# ---------- LANGUAGE DECISION ----------
-def identify_language(text, whisper_lang):
-    return whisper_lang or "en"
+    OUTPUT:
+        {
+            aligned_text,
+            start_time,
+            end_time,
+            speaker_no,
+            overlap,
+            gender
+        }
+    """
 
-
-def needs_translation(text, detected, target):
-    if not re.search(r"[a-zA-Z\u0900-\u0D7F]", text):
-        return False
-    if len(text.strip()) < 2:
-        return False
-    return detected != target[:2]
-
-
-# ---------- TAG SAFE SPLIT ----------
-def split_tag(text):
-    m = re.match(r'(<S:.*?\|G:.*?>)?(.*)', text, re.S)
-    return (m.group(1) or "", m.group(2).strip())
-
-
-# ---------- GOOGLE FALLBACK ----------
-def google_batch(texts, src, dst):
-    src_code = src[:2] if len(src) > 3 else src
-    dst_code = dst[:2] if len(dst) > 3 else dst
-
-    def translate(t):
-        try:
-            return GoogleTranslator(source=src_code, target=dst_code).translate(t)
-        except:
-            return t
-
-    with ThreadPoolExecutor(max_workers=5) as exe:
-        return list(exe.map(translate, texts))
-
-
-# ---------- MAIN PIPELINE ----------
-def run_translation_process(raw_segments, target_lang, model_manager=None):
-    
-    processed = []
-    to_translate = []
-    indexes = []
-
-    # ---- Decision Phase ----
-    for i, s in enumerate(raw_segments):
-        text = s["text"]
-        detected = identify_language(text, s.get("lang"))
-
-        if needs_translation(text, detected, target_lang):
-            tag, clean = split_tag(text)
-            to_translate.append((tag, clean))
-            indexes.append(i)
-            s["action"] = "TRANSLATE"
-        else:
-            s["action"] = "KEEP"
-
-        s["lang"] = detected
-        processed.append(s)
-
-    if not to_translate:
-        return processed
-
-    tags, texts = zip(*to_translate)
-
-    # ---- Translation Phase ----
     try:
-        if model_manager and model_manager.get_translator():
-            model = model_manager.get_translator()
-            results = model(list(texts), src_lang="auto", tgt_lang=target_lang)
-            translated = [r["translation_text"] for r in results]
-        else:
-            raise RuntimeError
-    except:
-        translated = google_batch(texts, "auto", target_lang)
+        # -------------------------
+        # BASIC CLEAN
+        # -------------------------
+        text = text.strip()
+        words = text.split()
 
-    # ---- Merge Back ----
-    for idx, out, tag in zip(indexes, translated, tags):
-        processed[idx]["text"] = f"{tag} {out}".strip()
-        processed[idx]["translated"] = True
+        # -------------------------
+        # DURATION CALC
+        # -------------------------
+        duration = max(end_time - start_time, 0.1)
 
-    return processed
+        # average speaking speed ≈ 2.5 words/sec
+        max_words = int(duration * 3)
+
+        # -------------------------
+        # OVERFLOW CORRECTION
+        # -------------------------
+        if len(words) > max_words:
+            words = words[:max_words]
+
+        aligned_text = " ".join(words)
+
+        # -------------------------
+        # UNDERFLOW CORRECTION
+        # -------------------------
+        if len(words) < 1:
+            aligned_text = "..."
+
+        # -------------------------
+        # FINAL STRUCTURE
+        # -------------------------
+        return {
+            "aligned_text": aligned_text,
+            "start_time": round(start_time, 2),
+            "end_time": round(end_time, 2),
+            "speaker_no": speaker_no,
+            "overlap": overlap,
+            "gender": gender
+        }
+
+    except Exception as e:
+        print(f"Alignment Error: {e}")
+        return {
+            "aligned_text": text,
+            "start_time": start_time,
+            "end_time": end_time,
+            "speaker_no": speaker_no,
+            "overlap": overlap,
+            "gender": gender
+        }

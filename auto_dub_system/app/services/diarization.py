@@ -1,182 +1,182 @@
-import os
-import torch
-import librosa
-import numpy as np
-import warnings
-from dotenv import load_dotenv
+"""
+Speaker Diarization Module
+Input: full_audio_path
+Output: timestamps + speaker_labels + speaker_count + overlap
+"""
 
-load_dotenv()
-warnings.filterwarnings("ignore", category=UserWarning)
+import logging
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass, asdict
+import json
 
-# =========================
-# SPEAKER ANALYZER
-# =========================
-class SpeakerAnalyzer:
+logger = logging.getLogger(__name__)
 
-    def __init__(self, hf_token=None, enable_gender=True):
+# ============================================================================
+# Data Structures
+# ============================================================================
 
-        self.token = hf_token or os.getenv("HF_TOKEN")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+@dataclass
+class SpeakerSegment:
+    start_time: float
+    end_time: float
+    speaker_label: str
+    overlap: bool = False
+    
+    def to_dict(self) -> dict:
+        return asdict(self)
 
-        self.pipeline = None
-        self.enable_gender = enable_gender
 
-        self._load_diarizer()
+@dataclass
+class DiarizationResult:
+    timestamps: List[Tuple[float, float]]
+    speaker_labels: List[str]
+    speaker_count: int
+    overlap: bool
+    segments: List[SpeakerSegment]
+    
+    def to_dict(self) -> dict:
+        return {
+            "timestamps": self.timestamps,
+            "speaker_labels": self.speaker_labels,
+            "speaker_count": self.speaker_count,
+            "overlap": self.overlap,
+            "segments": [s.to_dict() for s in self.segments]
+        }
+    
+    def save_json(self, path: str):
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2))
 
-    # -------------------------
-    # LOAD DIARIZATION MODEL
-    # -------------------------
-    def _load_diarizer(self):
+
+class SpeakerDiarizationError(Exception):
+    pass
+
+
+# ============================================================================
+# Core Logic
+# ============================================================================
+
+class SpeakerDiarizer:
+    def __init__(self, model: str = "pyannote/speaker-diarization-3.1", 
+                 token: Optional[str] = None, device: str = "cpu"):
         try:
             from pyannote.audio import Pipeline
-
-            self.pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                token=self.token
-            )
-
-            self.pipeline.to(torch.device(self.device))
-            print("✅ Diarization model loaded")
-
+            import torch
+            
+            self.pipeline = Pipeline.from_pretrained(model, use_auth_token=token)
+            dev = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
+            self.pipeline = self.pipeline.to(dev)
+            logger.info(f"Pipeline ready on {dev}")
+        except ImportError:
+            raise SpeakerDiarizationError("Install: pip install pyannote.audio torch torchaudio")
         except Exception as e:
-            print("❌ Failed loading diarization model:", e)
-            self.pipeline = None
+            raise SpeakerDiarizationError(f"Init failed: {e}")
+    
+    def _find_overlaps(self, diarization) -> List[Tuple[float, float]]:
+        overlaps = set()
+        tracks = list(diarization.itertracks(yield_label=True))
+        for i, (s1, _, _) in enumerate(tracks):
+            for s2, _, _ in tracks[i+1:]:
+                if s1.overlaps(s2):
+                    start, end = max(s1.start, s2.start), min(s1.end, s2.end)
+                    if end > start:
+                        overlaps.add((start, end))
+        return sorted(overlaps)
+    
+    def _build_segments(self, diarization, overlaps) -> List[SpeakerSegment]:
+        segments = []
+        for seg, _, label in diarization.itertracks(yield_label=True):
+            has_overlap = any(not (seg.end <= os or seg.start >= oe) for os, oe in overlaps)
+            segments.append(SpeakerSegment(seg.start, seg.end, label, has_overlap))
+        return segments
+    
+    def process(self, audio_path: str) -> DiarizationResult:
+        path = Path(audio_path)
+        if not path.is_file():
+            raise SpeakerDiarizationError(f"File not found: {audio_path}")
+        
+        logger.info(f"Processing: {path.name}")
+        diarization = self.pipeline(str(path))
+        overlaps = self._find_overlaps(diarization)
+        segments = self._build_segments(diarization, overlaps)
+        
+        timestamps = [(s.start_time, s.end_time) for s in segments]
+        labels = [s.speaker_label for s in segments]
+        
+        result = DiarizationResult(
+            timestamps=timestamps,
+            speaker_labels=labels,
+            speaker_count=len(set(labels)),
+            overlap=len(overlaps) > 0,
+            segments=segments
+        )
+        
+        logger.info(f"✓ {result.speaker_count} speakers, {len(segments)} segments, overlap: {result.overlap}")
+        return result
 
 
-    # -------------------------
-    # MAIN ANALYSIS FUNCTION
-    # -------------------------
-    def analyze(self, audio):
+# ============================================================================
+# Main Interface
+# ============================================================================
 
-        if not self.pipeline:
-            return [], {}
-
-        diarization = self._run_diarization(audio)
-        turns = self._extract_turns(diarization)
-
-        if not self.enable_gender:
-            return turns, {}
-
-        genders = self._detect_genders(audio, turns)
-
-        return turns, genders
-
-
-    # -------------------------
-    # RUN MODEL
-    # -------------------------
-    def _run_diarization(self, audio):
-
-        if isinstance(audio, np.ndarray):
-            waveform = torch.from_numpy(audio).float()
-
-            if waveform.ndim == 1:
-                waveform = waveform.unsqueeze(0)
-
-            return self.pipeline({
-                "waveform": waveform,
-                "sample_rate": 16000
-            })
-
-        return self.pipeline(audio)
+def speaker_diarization(full_audio_path: str,
+                       model_name: str = "pyannote/speaker-diarization-3.1",
+                       use_auth_token: Optional[str] = None,
+                       device: str = "cpu",
+                       save_json: bool = False,
+                       output_json_path: Optional[str] = None) -> Dict:
+    """
+    Perform speaker diarization with overlap detection.
+    
+    Returns: {timestamps, speaker_labels, speaker_count, overlap, segments}
+    """
+    diarizer = SpeakerDiarizer(model_name, use_auth_token, device)
+    result = diarizer.process(full_audio_path)
+    
+    if save_json:
+        json_path = output_json_path or f"{Path(full_audio_path).stem}_diarization.json"
+        result.save_json(json_path)
+    
+    return result.to_dict()
 
 
-    # -------------------------
-    # EXTRACT SPEAKER SEGMENTS
-    # -------------------------
-    def _extract_turns(self, diarization):
-
-        turns = []
-
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            turns.append({
-                "start": turn.start,
-                "end": turn.end,
-                "speaker": speaker
-            })
-
-        return turns
+def check_dependencies() -> Dict[str, bool]:
+    deps = {}
+    for pkg in ['pyannote.audio', 'torch', 'torchaudio']:
+        try:
+            __import__(pkg.replace('.', '_') if '.' in pkg else pkg)
+            deps[pkg] = True
+        except ImportError:
+            deps[pkg] = False
+    return deps
 
 
-    # -------------------------
-    # GENDER DETECTION
-    # -------------------------
-    def _detect_genders(self, audio, turns):
+# ============================================================================
+# CLI
+# ============================================================================
 
-        sr = 16000
-
-        if isinstance(audio, str):
-            y, _ = librosa.load(audio, sr=sr)
-        else:
-            y = audio
-
-        samples = {}
-
-        # collect samples per speaker
-        for t in turns:
-            spk = t["speaker"]
-
-            if spk not in samples:
-                samples[spk] = []
-
-            dur = min(t["end"] - t["start"], 3)
-            if dur < 0.4:
-                continue
-
-            s = int(t["start"] * sr)
-            e = int((t["start"] + dur) * sr)
-
-            samples[spk].append(y[s:e])
-
-            # limit total length
-            if sum(len(x) for x in samples[spk]) > sr * 10:
-                continue
-
-        genders = {}
-
-        for spk, segs in samples.items():
-
-            if not segs:
-                genders[spk] = "Unknown"
-                continue
-
-            data = np.concatenate(segs)
-
-            f0, voiced, _ = librosa.pyin(
-                data,
-                fmin=librosa.note_to_hz("C2"),
-                fmax=librosa.note_to_hz("C7"),
-                sr=sr
-            )
-
-            voiced_f0 = f0[voiced]
-
-            if len(voiced_f0) == 0:
-                genders[spk] = "Unknown"
-            else:
-                genders[spk] = "Female" if np.nanmean(voiced_f0) > 165 else "Male"
-
-        return genders
-
-
-# =========================
-# WORD → SPEAKER MAPPING
-# =========================
-def get_speaker(start, end, turns):
-
-    best = None
-    best_overlap = 0
-
-    for t in turns:
-        overlap = max(0, min(end, t["end"]) - max(start, t["start"]))
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best = t["speaker"]
-
-    return best if best else turns[0]["speaker"]
-
-
-def assign_word_speakers(words, turns):
-    for w in words:
-        w["speaker"] = get_speaker(w["start"], w["end"], turns)
-    return words
+if __name__ == "__main__":
+    import sys
+    
+    deps = check_dependencies()
+    if not all(deps.values()):
+        print("❌ Install: pip install pyannote.audio torch torchaudio")
+        sys.exit(1)
+    
+    if len(sys.argv) < 2:
+        print("Usage: python speaker_diarization.py <audio_file> [hf_token]")
+        sys.exit(0)
+    
+    try:
+        result = speaker_diarization(
+            full_audio_path=sys.argv[1],
+            use_auth_token=sys.argv[2] if len(sys.argv) > 2 else None,
+            save_json=True
+        )
+        print(f"\n✓ Speakers: {result['speaker_count']}, Segments: {len(result['segments'])}, Overlap: {result['overlap']}")
+        for seg in result['segments'][:5]:
+            print(f"  [{seg['start_time']:.2f}s-{seg['end_time']:.2f}s] {seg['speaker_label']}" + 
+                  (" ⚠️" if seg['overlap'] else ""))
+    except Exception as e:
+        print(f"❌ {e}")
+        sys.exit(1)

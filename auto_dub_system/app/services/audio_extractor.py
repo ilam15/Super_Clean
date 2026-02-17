@@ -1,256 +1,152 @@
 """
 Audio Separator Module
-
-Function: audio_separator
 Input: video_path
-Process: FFmpeg
 Output: audio_path
-
-This module extracts audio from video files using FFmpeg.
 """
 
-import os
 import subprocess
 import logging
 from pathlib import Path
 from typing import Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# Exception
+# ============================================================================
 
 class AudioSeparatorError(Exception):
-    """Custom exception for audio separator errors"""
     pass
 
 
-def audio_separator(
-    video_path: str,
-    output_dir: Optional[str] = None,
-    output_format: str = "wav",
-    audio_codec: str = "pcm_s16le",
-    sample_rate: int = 16000,
-    channels: int = 1,
-    overwrite: bool = False
-) -> str:
+# ============================================================================
+# Core Logic
+# ============================================================================
+
+def audio_separator(video_path: str,
+                   output_dir: Optional[str] = None,
+                   output_format: str = "wav",
+                   audio_codec: str = "pcm_s16le",
+                   sample_rate: int = 16000,
+                   channels: int = 1,
+                   overwrite: bool = False) -> str:
     """
-    Extracts audio from a video file using FFmpeg.
+    Extract audio from video using FFmpeg.
     
-    Args:
-        video_path (str): Path to the input video file
-        output_dir (str, optional): Directory to save the extracted audio. 
-                                   If None, saves in the same directory as the video.
-        output_format (str): Output audio format (default: "wav")
-        audio_codec (str): Audio codec to use (default: "pcm_s16le" for WAV)
-        sample_rate (int): Audio sample rate in Hz (default: 16000)
-        channels (int): Number of audio channels (default: 1 for mono)
-        overwrite (bool): Whether to overwrite existing output file (default: False)
-    
-    Returns:
-        str: Path to the extracted audio file
-    
-    Raises:
-        AudioSeparatorError: If video file doesn't exist or FFmpeg fails
-        FileNotFoundError: If FFmpeg is not installed/accessible
-    
-    Example:
-        >>> audio_path = audio_separator("input_video.mp4")
-        >>> print(f"Audio extracted to: {audio_path}")
+    Returns: Path to extracted audio file
     """
-    
-    # Validate input video path
+    # Validate input
     video_path = Path(video_path)
-    if not video_path.exists():
+    if not video_path.is_file():
         raise AudioSeparatorError(f"Video file not found: {video_path}")
     
-    if not video_path.is_file():
-        raise AudioSeparatorError(f"Path is not a file: {video_path}")
+    # Determine output path
+    output_dir = Path(output_dir) if output_dir else video_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = output_dir / f"{video_path.stem}_audio.{output_format}"
     
-    # Determine output directory
-    if output_dir is None:
-        output_dir = video_path.parent
-    else:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Generate output audio path
-    audio_filename = f"{video_path.stem}_audio.{output_format}"
-    audio_path = output_dir / audio_filename
-    
-    # Check if output file already exists
+    # Check if already exists
     if audio_path.exists() and not overwrite:
-        logger.warning(f"Audio file already exists: {audio_path}")
-        logger.info("Returning existing file path. Set overwrite=True to regenerate.")
+        logger.warning(f"Audio exists: {audio_path} (set overwrite=True to regenerate)")
         return str(audio_path)
     
     # Build FFmpeg command
-    ffmpeg_command = [
+    cmd = [
         "ffmpeg",
-        "-i", str(video_path),           # Input video file
-        "-vn",                            # Disable video
-        "-acodec", audio_codec,           # Audio codec
-        "-ar", str(sample_rate),          # Sample rate
-        "-ac", str(channels),             # Number of channels
+        "-i", str(video_path),
+        "-vn",
+        "-acodec", audio_codec,
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "-y" if overwrite else "-n",
+        str(audio_path)
     ]
     
-    if overwrite:
-        ffmpeg_command.append("-y")       # Overwrite output file
-    else:
-        ffmpeg_command.append("-n")       # Do not overwrite
-    
-    ffmpeg_command.append(str(audio_path))  # Output file
-    
     try:
-        logger.info(f"Extracting audio from: {video_path}")
-        logger.info(f"Output path: {audio_path}")
-        logger.info(f"Settings: {output_format}, {sample_rate}Hz, {channels} channel(s)")
+        logger.info(f"Extracting audio: {video_path.name} → {audio_path.name}")
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         
-        # Execute FFmpeg command
-        result = subprocess.run(
-            ffmpeg_command,
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        
-        # Verify output file was created
         if not audio_path.exists():
-            raise AudioSeparatorError("FFmpeg completed but output file was not created")
+            raise AudioSeparatorError("FFmpeg completed but output file not created")
         
-        logger.info(f"✓ Audio extraction successful: {audio_path}")
+        logger.info(f"✓ Audio extracted: {audio_path}")
         return str(audio_path)
-    
+        
     except FileNotFoundError:
-        raise FileNotFoundError(
-            "FFmpeg not found. Please install FFmpeg:\n"
-            "  - Windows: Download from https://ffmpeg.org/download.html or use 'winget install ffmpeg'\n"
-            "  - Linux: sudo apt-get install ffmpeg\n"
-            "  - macOS: brew install ffmpeg"
-        )
-    
+        raise FileNotFoundError("FFmpeg not installed. Install: winget install ffmpeg")
     except subprocess.CalledProcessError as e:
-        error_msg = f"FFmpeg error: {e.stderr}"
-        logger.error(error_msg)
-        raise AudioSeparatorError(error_msg)
-    
+        raise AudioSeparatorError(f"FFmpeg error: {e.stderr}")
     except Exception as e:
-        logger.error(f"Unexpected error during audio extraction: {str(e)}")
-        raise AudioSeparatorError(f"Audio extraction failed: {str(e)}")
+        raise AudioSeparatorError(f"Extraction failed: {e}")
 
 
 def check_ffmpeg_installed() -> bool:
-    """
-    Check if FFmpeg is installed and accessible.
-    
-    Returns:
-        bool: True if FFmpeg is installed, False otherwise
-    """
+    """Check if FFmpeg is available"""
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         return False
 
 
 def get_audio_info(video_path: str) -> dict:
-    """
-    Get audio information from a video file using FFprobe.
-    
-    Args:
-        video_path (str): Path to the video file
-    
-    Returns:
-        dict: Audio information including codec, sample_rate, channels, duration
-    
-    Raises:
-        AudioSeparatorError: If FFprobe fails or no audio stream found
-    """
+    """Get audio metadata from video file"""
     try:
-        command = [
-            "ffprobe",
-            "-v", "error",
+        cmd = [
+            "ffprobe", "-v", "error",
             "-select_streams", "a:0",
             "-show_entries", "stream=codec_name,sample_rate,channels,duration",
             "-of", "default=noprint_wrappers=1",
             str(video_path)
         ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        # Parse output
-        info = {}
-        for line in result.stdout.strip().split('\n'):
-            if '=' in line:
-                key, value = line.split('=', 1)
-                info[key] = value
-        
+        info = dict(line.split('=', 1) for line in result.stdout.strip().split('\n') if '=' in line)
         return {
             "codec": info.get("codec_name", "unknown"),
             "sample_rate": int(info.get("sample_rate", 0)),
             "channels": int(info.get("channels", 0)),
             "duration": float(info.get("duration", 0.0))
         }
-    
-    except subprocess.CalledProcessError:
-        raise AudioSeparatorError("No audio stream found in video file")
     except Exception as e:
-        raise AudioSeparatorError(f"Failed to get audio info: {str(e)}")
+        raise AudioSeparatorError(f"Failed to get audio info: {e}")
 
 
-# Example usage and testing
+# ============================================================================
+# CLI
+# ============================================================================
+
 if __name__ == "__main__":
     import sys
     
-    # Check if FFmpeg is installed
     if not check_ffmpeg_installed():
-        print("❌ FFmpeg is not installed. Please install FFmpeg to use this module.")
+        print("❌ FFmpeg not installed. Install: winget install ffmpeg")
         sys.exit(1)
     
-    print("✓ FFmpeg is installed and accessible\n")
+    print("✓ FFmpeg ready\n")
     
-    # Example usage
-    if len(sys.argv) > 1:
-        # Use command line argument as video path
+    if len(sys.argv) < 2:
+        print("Usage: python audio_separator.py <video_file>")
+        print("\nExample:")
+        print("  python audio_separator.py video.mp4")
+        sys.exit(0)
+    
+    try:
         video_file = sys.argv[1]
         
-        try:
-            # Get audio info first
-            print("📊 Getting audio information...")
-            audio_info = get_audio_info(video_file)
-            print(f"  Codec: {audio_info['codec']}")
-            print(f"  Sample Rate: {audio_info['sample_rate']} Hz")
-            print(f"  Channels: {audio_info['channels']}")
-            print(f"  Duration: {audio_info['duration']:.2f} seconds\n")
-            
-            # Extract audio
-            print("🎵 Extracting audio...")
-            audio_path = audio_separator(
-                video_path=video_file,
-                output_format="wav",
-                sample_rate=16000,
-                channels=1,
-                overwrite=True
-            )
-            
-            print(f"\n✓ Success! Audio saved to: {audio_path}")
-            
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-            sys.exit(1)
-    
-    else:
-        print("Usage: python audio_separator.py <video_file_path>")
-        print("\nExample:")
-        print("  python audio_separator.py input_video.mp4")
-        print("\nThis will extract audio and save it as 'input_video_audio.wav'")
+        # Show audio info
+        print("📊 Audio info:")
+        info = get_audio_info(video_file)
+        print(f"  Codec: {info['codec']}")
+        print(f"  Sample Rate: {info['sample_rate']} Hz")
+        print(f"  Channels: {info['channels']}")
+        print(f"  Duration: {info['duration']:.2f}s\n")
+        
+        # Extract audio
+        print("🎵 Extracting audio...")
+        audio_path = audio_separator(video_file, overwrite=True)
+        print(f"\n✓ Success: {audio_path}")
+        
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        sys.exit(1)

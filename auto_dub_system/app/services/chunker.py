@@ -1,7 +1,13 @@
-import os, subprocess, numpy as np, torch, librosa, soundfile as sf
+import os
+import subprocess
+import numpy as np
+import torch
+import librosa
+import soundfile as sf
+
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
-from collections import Counter
+from collections import Counter, defaultdict
 from types import SimpleNamespace
 
 
@@ -34,22 +40,27 @@ class ChunkingManager:
         if not os.path.exists(source):
             raise FileNotFoundError(source)
 
-        cmd=[cls.FFMPEG,"-loglevel","error"]
+        cmd = [cls.FFMPEG, "-loglevel", "error"]
 
-        if start: cmd+=["-ss",str(start)]
-        cmd+=["-i",source]
-        if duration: cmd+=["-t",str(duration)]
+        if start:
+            cmd += ["-ss", str(start)]
 
-        cmd+=["-vn","-ac","1","-ar",str(sr),"-f","s16le","pipe:1"]
+        cmd += ["-i", source]
 
-        p=subprocess.Popen(cmd,stdout=subprocess.PIPE)
+        if duration:
+            cmd += ["-t", str(duration)]
 
-        size=sr*chunk_sec*2
+        cmd += ["-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "pipe:1"]
+
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+
+        size = sr * chunk_sec * 2
 
         while True:
-            raw=p.stdout.read(size)
-            if not raw: break
-            yield np.frombuffer(raw,np.int16).astype(np.float32)/32768
+            raw = p.stdout.read(size)
+            if not raw:
+                break
+            yield np.frombuffer(raw, np.int16).astype(np.float32) / 32768
 
 
     # =====================================================
@@ -57,35 +68,45 @@ class ChunkingManager:
     # =====================================================
     @classmethod
     def segment_numpy(cls, source, start, duration=None, sr=16000):
-        chunks=list(cls.audio_chunks(source,sr,chunk_sec=duration or 600,start=start,duration=duration))
-        return np.concatenate(chunks) if chunks else np.array([],np.float32)
+        chunks = list(
+            cls.audio_chunks(
+                source,
+                sr,
+                chunk_sec=duration or 600,
+                start=start,
+                duration=duration
+            )
+        )
+        return np.concatenate(chunks) if chunks else np.array([], np.float32)
 
 
     # =====================================================
     # ASR CHUNKING
     # =====================================================
     @staticmethod
-    def asr(audio, model, src_lang="auto", lang_map=None, device="cpu"):
+    def asr(audio, model, src_lang="auto", device="cpu"):
 
-        sr=16000
-        dur=len(audio)/sr
-        win=20 if dur>60 else 10
-        step=win*sr
+        sr = 16000
+        dur = len(audio) / sr
+        win = 20 if dur > 60 else 10
+        step = win * sr
 
-        segs=[]; infos=[]
+        segs = []
+        infos = []
 
-        for i in range(0,len(audio),step):
+        for i in range(0, len(audio), step):
 
-            chunk=audio[i:i+step]
-            if len(chunk)<8000: continue
+            chunk = audio[i:i + step]
+            if len(chunk) < 8000:
+                continue
 
-            offset=i/sr
+            offset = i / sr
 
-            out,info=model.transcribe(
+            out, info = model.transcribe(
                 chunk,
                 vad_filter=True,
-                language=None if src_lang=="auto" else src_lang,
-                beam_size=5 if device=="cuda" else 2,
+                language=None if src_lang == "auto" else src_lang,
+                beam_size=5 if device == "cuda" else 2,
                 word_timestamps=True
             )
 
@@ -93,16 +114,15 @@ class ChunkingManager:
 
             for s in out:
                 segs.append(SimpleNamespace(
-                    start=s.start+offset,
-                    end=s.end+offset,
+                    start=s.start + offset,
+                    end=s.end + offset,
                     text=s.text,
                     words=s.words,
                     segment_language=info.language,
                     segment_language_prob=info.language_probability
                 ))
 
-        g=max(infos,key=lambda x:Counter([i.language for i in infos]).most_common(1)[0][0]) if infos else SimpleNamespace(language="en",language_probability=0)
-        return segs,g
+        return segs
 
 
     # =====================================================
@@ -111,50 +131,192 @@ class ChunkingManager:
     @staticmethod
     def speakers(audio, diarizer, gender_model, min_sec=2.5):
 
-        wav=torch.from_numpy(audio).float().unsqueeze(0)
-        diar=diarizer({"waveform":wav,"sample_rate":16000})
+        wav = torch.from_numpy(audio).float().unsqueeze(0)
+        diar = diarizer({"waveform": wav, "sample_rate": 16000})
 
-        sr=16000
-        turns=[]
-        bank={}
+        sr = 16000
+        turns = []
+        bank = {}
 
-        for t,_,spk in diar.itertracks(yield_label=True):
-            turns.append({"start":t.start,"end":t.end,"speaker":spk})
-            seg=audio[int(t.start*sr):int(t.end*sr)]
-            if len(seg)>0: bank.setdefault(spk,[]).append(seg)
+        for t, _, spk in diar.itertracks(yield_label=True):
+            turns.append({"start": t.start, "end": t.end, "speaker": spk})
+            seg = audio[int(t.start * sr):int(t.end * sr)]
+            if len(seg) > 0:
+                bank.setdefault(spk, []).append(seg)
 
-        genders={}
-        for spk,chunks in bank.items():
-            merged=np.concatenate(chunks)
-            if len(merged)<sr*min_sec:
-                genders[spk]="Unknown"
+        genders = {}
+
+        for spk, chunks in bank.items():
+            merged = np.concatenate(chunks)
+            if len(merged) < sr * min_sec:
+                genders[spk] = "Unknown"
                 continue
-            r=gender_model.predict(merged)
-            genders[spk]=r.get("gender","Unknown").capitalize()
+            r = gender_model.predict(merged)
+            genders[spk] = r.get("gender", "Unknown").capitalize()
 
-        return turns,genders
+        return turns, genders
 
 
     # =====================================================
     # SILENCE REMOVAL
     # =====================================================
     @staticmethod
-    def remove_silence(in_path,out_path,min_len=100,thresh=-45,keep=50):
+    def remove_silence(in_path, out_path, min_len=100, thresh=-45, keep=50):
 
-        snd=AudioSegment.from_file(in_path)
-        parts=split_on_silence(snd,min_len,thresh,keep)
-        out=sum(parts,AudioSegment.empty())
-        out.set_frame_rate(24000).set_channels(1).export(out_path,format="wav")
+        snd = AudioSegment.from_file(in_path)
+        parts = split_on_silence(snd, min_len, thresh, keep)
+        out = sum(parts, AudioSegment.empty())
+        out.set_frame_rate(24000).set_channels(1).export(out_path, format="wav")
         return out_path
 
 
     @staticmethod
     def trim_edges(path):
-        y,sr=librosa.load(path)
-        y,_=librosa.effects.trim(y,top_db=60)
-        new=path.replace(".wav","_trim.wav")
-        sf.write(new,y,sr)
+        y, sr = librosa.load(path)
+        y, _ = librosa.effects.trim(y, top_db=60)
+        new = path.replace(".wav", "_trim.wav")
+        sf.write(new, y, sr)
         return new
+
+
+    # =====================================================
+    # LAYER 3: CHUNK → SEGMENTS
+    # =====================================================
+    @classmethod
+    def chunk_to_segments(cls, chunks_data, output_folder="segments"):
+        """
+        Groups chunk-level outputs by speaker
+        and merges them into segment files.
+        """
+
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        speaker_groups = defaultdict(list)
+
+        # Group by speaker
+        for chunk in chunks_data:
+            speaker_groups[chunk["speaker_no"]].append(chunk)
+
+        segment_outputs = []
+
+        # Merge per speaker
+        for speaker_no, speaker_chunks in speaker_groups.items():
+
+            speaker_chunks = sorted(
+                speaker_chunks,
+                key=lambda x: x["start_time"]
+            )
+
+            segment_path = os.path.join(
+                output_folder,
+                f"segment_speaker_{speaker_no}.wav"
+            )
+
+            temp_file = f"chunk_list_{speaker_no}.txt"
+
+            with open(temp_file, "w") as f:
+                for chunk in speaker_chunks:
+                    f.write(
+                        f"file '{os.path.abspath(chunk['audio_path'])}'\n"
+                    )
+
+            command = [
+                cls.FFMPEG,
+                "-f", "concat",
+                "-safe", "0",
+                "-i", temp_file,
+                "-c", "copy",
+                segment_path
+            ]
+
+            subprocess.run(command, check=True)
+            os.remove(temp_file)
+
+            segment_outputs.append({
+                "segment_path": segment_path,
+                "start_time": speaker_chunks[0]["start_time"],
+                "end_time": speaker_chunks[-1]["end_time"],
+                "speaker_no": speaker_no,
+                "overlap": speaker_chunks[0]["overlap"]
+            })
+
+        return segment_outputs
+
+    # =====================================================
+    # LAYER 3: FINAL AUDIO CONNECT
+    # =====================================================
+    @classmethod
+    def final_audio_connect(cls, segments_data, output_path="final_audio.wav"):
+        """
+        Merges all segment files into one final audio file
+        in timeline order.
+        """
+
+        if not segments_data:
+            raise ValueError("No segment data provided")
+
+        # 1️⃣ Sort segments by start time
+        segments_data = sorted(
+            segments_data,
+            key=lambda x: x["start_time"]
+        )
+
+        temp_file = "segment_list.txt"
+
+        # 2️⃣ Create FFmpeg concat list
+        with open(temp_file, "w") as f:
+            for segment in segments_data:
+                f.write(
+                    f"file '{os.path.abspath(segment['segment_path'])}'\n"
+                )
+
+        # 3️⃣ Run FFmpeg merge
+        command = [
+            cls.FFMPEG,
+            "-f", "concat",
+            "-safe", "0",
+            "-i", temp_file,
+            "-c", "copy",
+            output_path
+        ]
+
+        subprocess.run(command, check=True)
+
+        # 4️⃣ Remove temp file
+        os.remove(temp_file)
+
+        return output_path
+
+    # =====================================================
+    # LAYER 3: FINAL VIDEO CONNECT
+    # =====================================================
+    @classmethod
+    def final_connect_with_video(
+        cls,
+        final_audio_path,
+        video_path,
+        output_path="final_video.mp4"
+    ):
+        """
+        Replaces original audio with dubbed audio.
+        """
+
+        command = [
+            cls.FFMPEG,
+            "-y",  # auto overwrite
+            "-i", video_path,
+            "-i", final_audio_path,
+            "-c:v", "copy",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-shortest",
+            output_path
+        ]
+
+        subprocess.run(command, check=True)
+
+        return output_path
 
 
 # auto init

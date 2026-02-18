@@ -44,8 +44,7 @@ async def _start_pipeline(file_location: str):
 
     workflow = chain(
         get_stage1_chain(file_location),
-        process_stage2.s(),
-        process_stage4.s()
+        process_stage2.s()
     )
     task = workflow.apply_async()
     return task

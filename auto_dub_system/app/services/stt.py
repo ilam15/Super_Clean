@@ -41,12 +41,12 @@ def speech_to_text(
         }
 
         files = {
-            "file": audio_file
+            "file": ("audio.wav", audio_file, "audio/wav")
         }
 
         data = {
             "model": "saaras:v1",
-            "translate": True,
+            "translate": "true", # string "true" is safer for some multipart parsers
             "target_language": "en"
         }
 
@@ -54,7 +54,20 @@ def speech_to_text(
         # API CALL
         # --------------------------
         response = requests.post(url, headers=headers, files=files, data=data)
+        
+        if response.status_code != 200:
+            logger.error(f"Sarvam API error {response.status_code}: {response.text}")
+            return {
+                "text": "",
+                "start_time": start_time,
+                "end_time": end_time,
+                "speaker_no": speaker_no,
+                "overlap": overlap,
+                "gender": gender
+            }
+
         result = response.json()
+        logger.info(f"Sarvam STT result for {chunk_path}: {result}")
 
         final_text = result.get("transcript", "")
 

@@ -122,6 +122,7 @@ class SpeakerDiarizer:
             dev = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
             self.pipeline = self.pipeline.to(dev)
             logger.info(f"Pipeline ready on {dev}")
+            print(f"INFO: Pyannote Diarization Model ({model}) is ACTIVE on {dev}.")
         except ImportError:
             raise SpeakerDiarizationError("Install: pip install pyannote.audio torch torchaudio")
         except Exception as e:

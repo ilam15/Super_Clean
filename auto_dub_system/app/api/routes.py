@@ -35,7 +35,7 @@ async def health_check():
     return {"status": "ok", "message": "Auto Dub System is running"}
 
 
-async def _start_pipeline(file_location: str):
+async def _start_pipeline(file_location: str, source_lang="auto", target_lang="en", gender_hint="Male"):
     """Helper to start the Celery pipeline for a given file."""
     from celery import chain
     from app.tasks.stage1_tasks import (
@@ -53,7 +53,7 @@ async def _start_pipeline(file_location: str):
         task_diarization.s(),
         task_overlap_split.s(),
         task_segment.s(),
-        task_chunk.s(file_location),
+        task_chunk.s(file_location, source_lang=source_lang, target_lang=target_lang, gender_hint=gender_hint),
         process_stage2.s()
     )
     task = workflow.apply_async()
@@ -71,6 +71,15 @@ async def upload_video(
     # Convert recover_bg string to bool
     recover_bg_bool = recover_bg.lower() in ("true", "1", "yes")
 
+    # Map language names to codes
+    lang_map = {
+        "English": "en", "Hindi": "hi", "Bengali": "bn", "Kannada": "kn",
+        "Malayalam": "ml", "Marathi": "mr", "Odia": "or", "Punjabi": "pa",
+        "Tamil": "ta", "Telugu": "te", "Gujarati": "gu"
+    }
+    target_lang_code = lang_map.get(target_lang, "en")
+    source_lang_code = lang_map.get(source_lang, "auto")
+
     # Save file to disk
     os.makedirs("data/uploads", exist_ok=True)
     file_location = f"data/uploads/{file.filename}"
@@ -78,13 +87,13 @@ async def upload_video(
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        task = await _start_pipeline(file_location)
+        task = await _start_pipeline(file_location, source_lang=source_lang_code, target_lang=target_lang_code, gender_hint=gender)
         return {
             "filename": file.filename,
             "task_id": task.id,
             "status": "processing_started",
-            "source_lang": source_lang,
-            "target_lang": target_lang,
+            "source_lang": source_lang_code,
+            "target_lang": target_lang_code,
             "gender": gender,
             "recover_bg": recover_bg_bool,
         }
@@ -117,13 +126,22 @@ async def dub_video(
         raise HTTPException(status_code=422, detail="Either 'file' or 'youtube_video_path' must be provided.")
 
     try:
-        task = await _start_pipeline(file_location)
+        # Map language names to codes
+        lang_map = {
+            "English": "en", "Hindi": "hi", "Bengali": "bn", "Kannada": "kn",
+            "Malayalam": "ml", "Marathi": "mr", "Odia": "or", "Punjabi": "pa",
+            "Tamil": "ta", "Telugu": "te", "Gujarati": "gu"
+        }
+        target_lang_code = lang_map.get(target_lang, "en")
+        source_lang_code = lang_map.get(source_lang, "auto")
+
+        task = await _start_pipeline(file_location, source_lang=source_lang_code, target_lang=target_lang_code, gender_hint=gender)
         return {
             "filename": os.path.basename(file_location),
             "task_id": task.id,
             "status": "processing_started",
-            "source_lang": source_lang,
-            "target_lang": target_lang,
+            "source_lang": source_lang_code,
+            "target_lang": target_lang_code,
             "gender": gender,
             "recover_bg": recover_bg_bool,
         }

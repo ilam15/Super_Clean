@@ -44,7 +44,9 @@ def task_stt(chunk):
         chunk["end_time"],
         chunk["speaker_no"],
         chunk["overlap"],
-        chunk.get("gender", "unknown")
+        chunk.get("gender", "unknown"),
+        target_lang=chunk.get("target_lang", "en"),
+        source_lang=chunk.get("source_lang", "auto")
     )
 
 @celery_app.task
@@ -133,9 +135,15 @@ def process_stage2(self, stage1_result):
         else:
             speaker_final_gender[speaker] = "male"
 
-    # Assign final gender to all chunks
+    # Assign final gender and language info to all chunks
+    target_lang = stage1_result.get("target_lang", "en")
+    source_lang = stage1_result.get("source_lang", "auto")
+    gender_hint = stage1_result.get("gender_hint", "Male").lower()
+    
     for chunk in chunks:
-        chunk["gender"] = speaker_final_gender.get(chunk.get("speaker_no", "unknown"), "male")
+        chunk["gender"] = speaker_final_gender.get(chunk.get("speaker_no", "unknown"), gender_hint)
+        chunk["target_lang"] = target_lang
+        chunk["source_lang"] = source_lang
         
     chunk_chains = []
     

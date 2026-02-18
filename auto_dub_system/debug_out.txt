@@ -1,0 +1,17 @@
+Checking path: c:\Users\sweth\OneDrive\Desktop\autodub1\Super_Clean\auto_dub_system\data\lid\lid.176.bin
+Exists: True
+Size: 131266198
+Model loaded successfully
+Error: Unable to avoid copy while creating an array as requested.
+If using `np.array(obj, copy=False)` replace it with `np.asarray(obj)` to allow a copy when needed (no behavior change in NumPy 1.x).
+For more details, see https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-changes-in-the-copy-keyword.
+Traceback (most recent call last):
+  File "C:\Users\sweth\OneDrive\Desktop\autodub1\Super_Clean\auto_dub_system\debug_fasttext.py", line 14, in <module>
+    pred = model.predict("Hello world")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sweth\AppData\Local\Programs\Python\Python311\Lib\site-packages\fasttext\FastText.py", line 228, in predict
+    return labels, np.array(probs, copy=False)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Unable to avoid copy while creating an array as requested.
+If using `np.array(obj, copy=False)` replace it with `np.asarray(obj)` to allow a copy when needed (no behavior change in NumPy 1.x).
+For more details, see https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-changes-in-the-copy-keyword.

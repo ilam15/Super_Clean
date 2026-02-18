@@ -72,7 +72,7 @@ def task_segment(diarization_data):
 
 # ---------- TASK 5 ----------
 @celery_app.task
-def task_chunk(diarization_data, video_path=None):
+def task_chunk(diarization_data, video_path=None, source_lang="auto", target_lang="en", gender_hint="Male"):
     all_chunks = []
 
     for idx, seg in enumerate(diarization_data["segments"]):
@@ -87,6 +87,9 @@ def task_chunk(diarization_data, video_path=None):
         all_chunks.extend(chunks)
 
     diarization_data["chunks"] = all_chunks
+    diarization_data["source_lang"] = source_lang
+    diarization_data["target_lang"] = target_lang
+    diarization_data["gender_hint"] = gender_hint
     if video_path:
         diarization_data["video_path"] = video_path
     return diarization_data

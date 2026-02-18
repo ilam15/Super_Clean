@@ -62,7 +62,9 @@ class GenderDetector:
                 self.model = pickle.load(f)
             with open(self.encoder_path, 'rb') as f:
                 self.label_encoder = pickle.load(f)
-            logger.info("✅ Gender detection model loaded successfully")
+            logger.info(f"✅ LOADED: LightGBM Gender Model ({self.model_path})")
+            logger.info(f"✅ LOADED: Label Encoder ({self.encoder_path})")
+            print("INFO: LightGBM Gender Detection Model is ACTIVE.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
 
@@ -213,20 +215,22 @@ class GenderDetector:
             pitch_mean = features[40]
             final_gender = model_gender
             
-            # Biological pitch ranges: Female >165Hz, Male <155Hz
-            if pitch_mean > 190 and model_gender != 'female':
+            # Biological pitch ranges: Female ≈ 165-255Hz, Male ≈ 85-155Hz
+            if pitch_mean > 170 and model_gender != 'female':
                 final_gender = 'female'
                 model_confidence = max(model_confidence, 0.85)
-            elif 50 < pitch_mean < 100 and model_gender != 'male':
+                logger.debug(f"Pitch {pitch_mean:.1f}Hz forced 'female' override")
+            elif 50 < pitch_mean < 155 and model_gender != 'male':
                 final_gender = 'male'
                 model_confidence = max(model_confidence, 0.85)
+                logger.debug(f"Pitch {pitch_mean:.1f}Hz forced 'male' override")
 
             # 4. Confidence Gating
             if model_confidence < prob_threshold:
                 # Use pitch as fallback for very clear cases
-                if pitch_mean > 200:
+                if pitch_mean > 175:
                     return {"gender": "female", "confidence": 0.60, "pitch": float(pitch_mean)}
-                elif 50 < pitch_mean < 95:
+                elif 50 < pitch_mean < 150:
                     return {"gender": "male", "confidence": 0.60, "pitch": float(pitch_mean)}
                 
                 logger.debug(f"Confidence too low ({model_confidence:.2f} < {prob_threshold})")

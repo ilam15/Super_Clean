@@ -287,73 +287,76 @@ class ChunkingManager:
     def final_audio_connect(cls, segments_data, output_path="final_audio.wav"):
         """
         Merges all segment files into one final audio file in timeline order,
-        inserting silence gaps to maintain synchronization with the video.
+        using FFmpeg amix+adelay to handle both gaps and overlaps correctly.
         """
         if not segments_data:
             raise ValueError("No segment data provided")
 
         # Sort segments by start time
         segments_data = sorted(segments_data, key=lambda x: x["start_time"])
-
-        temp_file = "segment_list.txt"
+        
         output_folder = os.path.dirname(output_path) or "."
         os.makedirs(output_folder, exist_ok=True)
-        
-        silence_files = []
+
+        inputs = []
+        filter_parts = []
+        mix_inputs = ""
+
+        # Build FFmpeg command with complex filter
+        for i, segment in enumerate(segments_data):
+            inputs.extend(["-i", os.path.abspath(segment['segment_path'])])
+            
+            # Delay in ms
+            delay_ms = int(segment["start_time"] * 1000)
+            # Filter part: delay then map to internal label [a_i]
+            filter_parts.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[a{i}]")
+            mix_inputs += f"[a{i}]"
+
+        filter_complex = ";".join(filter_parts)
+        if len(segments_data) > 1:
+            filter_complex += f";{mix_inputs}amix=inputs={len(segments_data)}:duration=longest:dropout_transition=0"
+        else:
+            filter_complex += f";{mix_inputs}copy"
+
+        command = [
+            cls.FFMPEG,
+            "-y",
+            *inputs,
+            "-filter_complex", filter_complex,
+            "-acodec", "pcm_s16le",
+            "-ar", "22050",
+            "-ac", "1",
+            output_path
+        ]
 
         try:
-            with open(temp_file, "w") as f:
-                current_time = 0.0
-                
-                for idx, segment in enumerate(segments_data):
-                    start_time = segment["start_time"]
-                    
-                    # 1. Fill gap before this segment with silence
-                    if start_time > current_time + 0.001:
-                        gap_dur = start_time - current_time
-                        silence_path = os.path.abspath(os.path.join(output_folder, f"gap_silence_{idx}.wav"))
-                        
-                        cmd_silence = [
-                            cls.FFMPEG, "-f", "lavfi",
-                            "-i", "anullsrc=r=22050:cl=mono",
-                            "-t", str(round(gap_dur, 3)),
-                            "-y", silence_path
-                        ]
-                        subprocess.run(cmd_silence, check=True, capture_output=True)
-                        f.write(f"file '{silence_path}'\n")
-                        silence_files.append(silence_path)
-                    
-                    # 2. Add the dubbed segment
-                    seg_path = os.path.abspath(segment['segment_path'])
-                    f.write(f"file '{seg_path}'\n")
-                    
-                    # Update current_time based on segment end_time
-                    # (Note: we use end_time from metadata to ensure sync even if audio file dur is slightly off)
-                    current_time = segment["end_time"]
-
-            # Run FFmpeg merge
-            command = [
-                cls.FFMPEG,
-                "-f", "concat",
-                "-safe", "0",
-                "-i", temp_file,
-                "-acodec", "pcm_s16le",
-                "-ar", "22050",
-                "-ac", "1",
-                "-y",
-                output_path
-            ]
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Mixing {len(segments_data)} segments into timeline...")
             subprocess.run(command, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Timeline mixing failed: {e.stderr}")
+            # Fallback to simple concat if amix fails (e.g. too many inputs)
+            logger.warning("Falling back to concat method...")
+            return cls._final_audio_connect_fallback(segments_data, output_path)
 
-        finally:
-            # Cleanup
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            for sil_path in silence_files:
-                if os.path.exists(sil_path):
-                    try: os.remove(sil_path)
-                    except: pass
+        return output_path
 
+    @classmethod
+    def _final_audio_connect_fallback(cls, segments_data, output_path):
+        """Simple concat fallback for very large numbers of segments."""
+        temp_file = "segment_list_fallback.txt"
+        with open(temp_file, "w") as f:
+            for segment in segments_data:
+                f.write(f"file '{os.path.abspath(segment['segment_path'])}'\n")
+        
+        command = [
+            cls.FFMPEG, "-y", "-f", "concat", "-safe", "0", 
+            "-i", temp_file, "-acodec", "pcm_s16le", 
+            "-ar", "22050", "-ac", "1", output_path
+        ]
+        subprocess.run(command, check=True, capture_output=True)
+        os.remove(temp_file)
         return output_path
 
     # =====================================================
@@ -380,7 +383,6 @@ class ChunkingManager:
             "-b:a", "192k",
             "-map", "0:v:0",    # Take first video stream from first input
             "-map", "1:a:0",    # Take first audio stream from second input (dubbed)
-            "-shortest",        # End when the shortest stream ends
             output_path
         ]
 

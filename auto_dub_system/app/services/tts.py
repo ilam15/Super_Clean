@@ -42,12 +42,19 @@ def text_to_speech(
         # -------------------------
         # VOICE SELECTION
         # -------------------------
-        if gender == "female":
-            voice = "anushka"
-        elif gender == "male":
-            voice = "arjun"
+        # Dynamic selection based on gender logic
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"TTS Voice Selection: gender={gender}, speaker={speaker_no}")
+        
+        if gender.lower() == "female":
+            voice = "anushka" # Sarvam female voice
+        elif gender.lower() == "male":
+            voice = "arjun"   # Sarvam male voice
         else:
-            voice = "neutral"
+            voice = "arjun"   # Default to male if unknown
+            
+        logger.info(f"Using voice: {voice}")
 
         # -------------------------
         # FILE PATH
@@ -94,6 +101,55 @@ def text_to_speech(
             raise Exception(f"No audio data in Sarvam response: {result}")
 
         # -------------------------
+        # SPEED ADJUSTMENT (LIPSYNC)
+        # -------------------------
+        try:
+            import librosa
+            import soundfile as sf
+            import subprocess
+            import shutil
+
+            ffmpeg_cmd = shutil.which("ffmpeg") or "ffmpeg"
+            
+            # Check original vs tts duration
+            orig_dur = end_time - start_time
+            if orig_dur <= 0:
+                orig_dur = 0.1
+                
+            y, sr = librosa.load(audio_path, sr=None)
+            tts_dur = len(y) / sr
+            
+            speed = tts_dur / orig_dur
+            
+            # atempo limit is [0.5, 2.0]. Chain them if needed.
+            filters = []
+            temp_speed = speed
+            while temp_speed > 2.0:
+                filters.append("atempo=2.0")
+                temp_speed /= 2.0
+            while temp_speed < 0.5:
+                filters.append("atempo=0.5")
+                temp_speed /= 0.5
+            if temp_speed != 1.0:
+                filters.append(f"atempo={temp_speed:.3f}")
+            
+            if filters:
+                logger.info(f"Adjusting speed: tts_dur={tts_dur:.2f}, target_dur={orig_dur:.2f}, speed={speed:.2f}")
+                filter_str = ",".join(filters)
+                out_path = audio_path.replace(".wav", "_synced.wav")
+                
+                cmd = [
+                    ffmpeg_cmd, "-y", "-i", audio_path,
+                    "-filter:a", filter_str,
+                    out_path
+                ]
+                subprocess.run(cmd, check=True, capture_output=True)
+                audio_path = out_path
+            
+        except Exception as speed_err:
+            logger.error(f"Lipsync speed adjustment failed: {speed_err}")
+
+        # -------------------------
         # OUTPUT STRUCTURE
         # -------------------------
         return {
@@ -101,7 +157,8 @@ def text_to_speech(
             "start_time": round(start_time, 2),
             "end_time": round(end_time, 2),
             "speaker_no": speaker_no,
-            "overlap": overlap
+            "overlap": overlap,
+            "gender": gender
         }
 
     except Exception as e:

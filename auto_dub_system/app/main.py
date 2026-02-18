@@ -1,10 +1,10 @@
 from fastapi import FastAPI
-# from app.api.routes import router as api_router
-# from app.config import settings
+from app.api.routes import router as api_router
+from app.config import settings
 
 app = FastAPI(title="Auto Dub System")
 
-# app.include_router(api_router)
+app.include_router(api_router)
 
 @app.get("/")
 def read_root():

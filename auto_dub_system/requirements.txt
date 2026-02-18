@@ -1,6 +1,40 @@
+# Core Frameworks
 fastapi
-uvicorn
+uvicorn[standard]
+python-multipart
+pydantic-settings
+python-dotenv
+requests
+aiofiles
+
+# Task Queue & Backend
 celery
 redis
-pydantic-settings
-requests
+
+# Audio Processing
+numpy
+librosa
+soundfile
+pydub
+static-ffmpeg
+scipy
+
+# Machine Learning & AI
+torch
+torchaudio
+lightgbm
+scikit-learn
+transformers
+accelerate
+huggingface-hub
+
+# Specialized Audio Services
+pyannote.audio
+speechbrain
+#demucs
+spleeter
+edge-tts
+
+# Utilities
+tqdm
+yt-dlp

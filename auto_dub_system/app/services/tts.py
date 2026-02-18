@@ -22,6 +22,7 @@ def text_to_speech(
         import os
         import uuid
         import requests
+        from app.config import settings
 
         os.makedirs(output_dir, exist_ok=True)
 

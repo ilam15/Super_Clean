@@ -62,30 +62,42 @@ class SpeakerDiarizer:
         try:
             import torchaudio
             import numpy as np
-            
-            # Patch for torchaudio >= 2.1
+
+            # Patch for torchaudio >= 2.1 (set_audio_backend was removed)
             if not hasattr(torchaudio, "set_audio_backend"):
                 torchaudio.set_audio_backend = lambda x: None
 
-            # Patch for numpy 2.0
+            # Patch for numpy 2.0 (np.NaN was removed)
             if not hasattr(np, "NaN"):
                 np.NaN = np.nan
 
-            # Patch huggingface_hub for pyannote compatibility
+            # Patch huggingface_hub: pyannote internals may still pass use_auth_token
             import huggingface_hub
-            if not hasattr(huggingface_hub, "_patched_download"):
-                original_download = huggingface_hub.hf_hub_download
-                def patched_download(*args, **kwargs):
-                    if 'use_auth_token' in kwargs:
-                        kwargs['token'] = kwargs.pop('use_auth_token')
-                    return original_download(*args, **kwargs)
-                huggingface_hub.hf_hub_download = patched_download
-                huggingface_hub._patched_download = True
+            if not getattr(huggingface_hub, "_patched_for_pyannote", False):
+                def _make_patched(original_fn):
+                    def patched(*args, **kwargs):
+                        if "use_auth_token" in kwargs:
+                            kwargs["token"] = kwargs.pop("use_auth_token")
+                        return original_fn(*args, **kwargs)
+                    return patched
+
+                huggingface_hub.hf_hub_download = _make_patched(huggingface_hub.hf_hub_download)
+                if hasattr(huggingface_hub, "snapshot_download"):
+                    huggingface_hub.snapshot_download = _make_patched(huggingface_hub.snapshot_download)
+                huggingface_hub._patched_for_pyannote = True
 
             from pyannote.audio import Pipeline
             import torch
-            
-            self.pipeline = Pipeline.from_pretrained(model, use_auth_token=token)
+            import inspect
+
+            # pyannote >= 3.x renamed use_auth_token → token in Pipeline.from_pretrained
+            pretrained_sig = inspect.signature(Pipeline.from_pretrained)
+            if "token" in pretrained_sig.parameters:
+                self.pipeline = Pipeline.from_pretrained(model, token=token)
+            else:
+                # Older pyannote still uses use_auth_token
+                self.pipeline = Pipeline.from_pretrained(model, use_auth_token=token)
+
             dev = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
             self.pipeline = self.pipeline.to(dev)
             logger.info(f"Pipeline ready on {dev}")

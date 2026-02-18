@@ -12,14 +12,17 @@ from app.services.tts import text_to_speech
 
 @celery_app.task
 def task_gender(chunk):
-    # Detect gender using GenderDetector
-    # chunk is dict with chunk_path
+    # Canonical gender is now pre-assigned in stage1.
+    # We only predict if it's missing or unknown.
+    if chunk.get("gender") and chunk["gender"] != "unknown":
+        return chunk
+
     detector = GenderDetector()
     try:
         gender_res = detector.predict(chunk["chunk_path"])
-        chunk["gender"] = gender_res.get("gender", "unknown")
+        chunk["gender"] = gender_res.get("gender", "male")
     except Exception as e:
-        chunk["gender"] = "unknown"
+        chunk["gender"] = "male"
     return chunk
 
 @celery_app.task

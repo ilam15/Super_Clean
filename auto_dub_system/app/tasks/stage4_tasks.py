@@ -3,7 +3,6 @@ Stage 4 tasks: Connect final audio with video.
 """
 
 from app.tasks.celery_app import celery_app
-from app.tasks.celery_app import celery_app
 from app.services.chunker import ChunkingManager
 
 @celery_app.task

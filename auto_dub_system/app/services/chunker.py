@@ -1,5 +1,6 @@
 import os
 import subprocess
+import shutil
 import numpy as np
 import torch
 import librosa
@@ -24,11 +25,13 @@ class ChunkingManager:
     # -----------------------------------------------------
     @classmethod
     def initialize(cls):
-        try:
-            from static_ffmpeg import run
-            cls.FFMPEG = run.get_or_fetch_platform_executables_else_raise()[0]
-        except:
-            pass
+        if not shutil.which("ffmpeg"):
+            try:
+                import static_ffmpeg
+                static_ffmpeg.add_paths()
+            except:
+                pass
+        cls.FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 
     # =====================================================
@@ -192,31 +195,34 @@ class ChunkingManager:
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
-        speaker_groups = defaultdict(list)
-
-        # Group by speaker
+        # Group by segment to preserve timeline
+        segment_groups = defaultdict(list)
         for chunk in chunks_data:
-            speaker_groups[chunk["speaker_no"]].append(chunk)
+            # Fallback to speaker_no if segment_id is missing
+            sid = chunk.get("segment_id", f"s_{chunk['speaker_no']}")
+            segment_groups[sid].append(chunk)
 
         segment_outputs = []
 
-        # Merge per speaker
-        for speaker_no, speaker_chunks in speaker_groups.items():
+        # Merge per segment
+        for sid, chunks in segment_groups.items():
 
-            speaker_chunks = sorted(
-                speaker_chunks,
+            chunks = sorted(
+                chunks,
                 key=lambda x: x["start_time"]
             )
 
+            speaker_no = chunks[0]["speaker_no"]
+
             segment_path = os.path.join(
                 output_folder,
-                f"segment_speaker_{speaker_no}.wav"
+                f"segment_{sid}.wav"
             )
 
-            temp_file = f"chunk_list_{speaker_no}.txt"
+            temp_file = f"chunk_list_{sid}.txt"
 
             with open(temp_file, "w") as f:
-                for chunk in speaker_chunks:
+                for chunk in chunks:
                     f.write(
                         f"file '{os.path.abspath(chunk['audio_path'])}'\n"
                     )
@@ -227,6 +233,7 @@ class ChunkingManager:
                 "-safe", "0",
                 "-i", temp_file,
                 "-c", "copy",
+                "-y",
                 segment_path
             ]
 
@@ -235,10 +242,11 @@ class ChunkingManager:
 
             segment_outputs.append({
                 "segment_path": segment_path,
-                "start_time": speaker_chunks[0]["start_time"],
-                "end_time": speaker_chunks[-1]["end_time"],
+                "start_time": chunks[0]["start_time"],
+                "end_time": chunks[-1]["end_time"],
                 "speaker_no": speaker_no,
-                "overlap": speaker_chunks[0]["overlap"]
+                "overlap": chunks[0].get("overlap", False),
+                "segment_id": sid
             })
 
         return segment_outputs
@@ -278,6 +286,7 @@ class ChunkingManager:
             "-safe", "0",
             "-i", temp_file,
             "-c", "copy",
+            "-y",
             output_path
         ]
 
@@ -323,7 +332,7 @@ class ChunkingManager:
     # LAYER 1: CHUNK SEPARATION
     # =====================================================
     @classmethod
-    def chunk_separation(cls, segment_path, start, end, speaker_no, overlap, chunk_sec=5):
+    def chunk_separation(cls, segment_path, start, end, speaker_no, overlap, segment_id=None, chunk_sec=5):
         """
         Splits a segment into smaller fixed-size chunks (e.g., 5s)
         Returns list of chunk metadata.
@@ -362,7 +371,8 @@ class ChunkingManager:
                 "start_time": round(current_time, 3),
                 "end_time": round(current_time + chunk_dur, 3),
                 "speaker_no": speaker_no,
-                "overlap": overlap
+                "overlap": overlap,
+                "segment_id": segment_id
             })
             
             current_time += chunk_dur
@@ -371,8 +381,8 @@ class ChunkingManager:
 
 
 # Standalone wrapper to match import in stage1_tasks
-def chunk_separation(segment_path, start, end, speaker_no, overlap):
-    return ChunkingManager.chunk_separation(segment_path, start, end, speaker_no, overlap)
+def chunk_separation(segment_path, start, end, speaker_no, overlap, segment_id=None):
+    return ChunkingManager.chunk_separation(segment_path, start, end, speaker_no, overlap, segment_id)
 
 # auto init
 ChunkingManager.initialize()

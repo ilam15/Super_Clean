@@ -36,7 +36,7 @@ const Login = () => {
 
     setLoading(true);
     try {
-      const { data } = await axios.post("https://betterknowit.onrender.com/api/users/login", {
+      const { data } = await axios.post("/api/users/login", {
         username: username.current.value,
         email: email.current.value,
         password: password.current.value,

@@ -20,6 +20,17 @@ warnings.filterwarnings("ignore", message=".*degrees of freedom.*")
 
 logger = logging.getLogger(__name__)
 
+# Global instance for singleton pattern
+_diarizer_instance = None
+
+def get_diarizer(model: str = "pyannote/speaker-diarization-3.1", 
+                 token: Optional[str] = None, device: str = "cpu"):
+    """Get or create a global SpeakerDiarizer instance (singleton per worker process)."""
+    global _diarizer_instance
+    if _diarizer_instance is None:
+        _diarizer_instance = SpeakerDiarizer(model, token, device)
+    return _diarizer_instance
+
 # ============================================================================
 # Data Structures
 # ============================================================================
@@ -209,7 +220,7 @@ def speaker_diarization(full_audio_path: str,
     
     Returns: {timestamps, speaker_labels, speaker_count, overlap, segments}
     """
-    diarizer = SpeakerDiarizer(model_name, use_auth_token, device)
+    diarizer = get_diarizer(model_name, use_auth_token, device)
     result = diarizer.process(full_audio_path)
     
     if save_json:

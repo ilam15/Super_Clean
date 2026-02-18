@@ -1,0 +1,5 @@
+R1: 400
+{"error":{"message":"body.model : Input should be 'saarika:v2.5', 'saaras:v3', 'saaras:v3-realtime', 'saarika:v1', 'saarika:v2' or 'saarika:flash'","code":"invalid_request_error","request_id":"20260218_9ce70214-6e0b-4ff4-bc53-e9b6f075776d"}}
+
+R2: 400
+{"error":{"message":"Audio file having duration greater than 30 seconds is not supported, use batch API for longer audios","code":"invalid_request_error","request_id":"20260218_2689fbef-7d63-4ae7-8b77-3ca2f84920b6"}}

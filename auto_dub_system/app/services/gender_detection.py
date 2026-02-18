@@ -9,10 +9,20 @@ import pickle
 import logging
 import numpy as np
 import librosa
-import lightgbm as lgb
+import pandas as pd
 from typing import Dict, List, Any, Optional, Union
 
 logger = logging.getLogger(__name__)
+
+# Global instance for singleton pattern
+_detector_instance = None
+
+def get_gender_detector():
+    """Get or create a global GenderDetector instance (singleton per worker process)."""
+    global _detector_instance
+    if _detector_instance is None:
+        _detector_instance = GenderDetector()
+    return _detector_instance
 
 
 class GenderDetector:
@@ -186,8 +196,14 @@ class GenderDetector:
                 return {"gender": "unknown", "confidence": 0.0}
 
             # 2. ML Prediction
+            # Convert to DataFrame if model has feature names to avoid UserWarning
             features_reshaped = features.reshape(1, -1)
-            prob_dist = self.model.predict_proba(features_reshaped)[0]
+            if hasattr(self.model, 'feature_name_'):
+                features_input = pd.DataFrame(features_reshaped, columns=self.model.feature_name_)
+            else:
+                features_input = features_reshaped
+                
+            prob_dist = self.model.predict_proba(features_input)[0]
             class_idx = np.argmax(prob_dist)
             model_confidence = float(prob_dist[class_idx])
             model_gender = self.label_encoder.inverse_transform([class_idx])[0]
@@ -249,7 +265,7 @@ def detect_gender_for_segments(segments: List[Dict[str, Any]]) -> List[Dict[str,
     Returns:
         Updated segments with 'gender' and 'gender_confidence' fields
     """
-    detector = GenderDetector()
+    detector = get_gender_detector()
     
     for seg in segments:
         audio = seg.get('audio_path') or seg.get('audio_data')

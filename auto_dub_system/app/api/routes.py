@@ -38,12 +38,22 @@ async def health_check():
 async def _start_pipeline(file_location: str):
     """Helper to start the Celery pipeline for a given file."""
     from celery import chain
-    from app.tasks.stage1_tasks import get_stage1_chain
+    from app.tasks.stage1_tasks import (
+        task_audio_separator,
+        task_diarization,
+        task_overlap_split,
+        task_segment,
+        task_chunk
+    )
     from app.tasks.stage2_tasks import process_stage2
-    from app.tasks.stage4_tasks import process_stage4
 
+    # Flatten the chain for better reliability
     workflow = chain(
-        get_stage1_chain(file_location),
+        task_audio_separator.s(file_location),
+        task_diarization.s(),
+        task_overlap_split.s(),
+        task_segment.s(),
+        task_chunk.s(file_location),
         process_stage2.s()
     )
     task = workflow.apply_async()

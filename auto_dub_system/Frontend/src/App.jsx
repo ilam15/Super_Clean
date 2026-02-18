@@ -3,7 +3,7 @@ import InputPage from "./components/InputPage/InputPage";
 import LandingPage from "./components/LandingPage/LandingPage";
 import PreviewPage from './components/PreviewPage/PreviewPage';
 import Register from "./components/authentication/Register";
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import Navbar from "./components/LandingPage/sections/Navbar";
 
 const Layout = () => {
@@ -30,6 +30,8 @@ const Layout = () => {
         } />
         <Route path="/input" element={<InputPage />} />
         <Route path="/preview" element={<PreviewPage />} />
+        {/* Catch-all route for better user experience */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
   );

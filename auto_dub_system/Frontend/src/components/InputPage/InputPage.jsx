@@ -229,7 +229,7 @@ const InputPage = () => {
         setProcessingProgress(0);
 
         try {
-            const response = await fetch('http://localhost:8000/youtube/info', {
+            const response = await fetch('/youtube/info', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -274,7 +274,7 @@ const InputPage = () => {
                 });
             }, 500);
 
-            const response = await fetch('http://localhost:8000/youtube/download', {
+            const response = await fetch('/youtube/download', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -345,27 +345,31 @@ const InputPage = () => {
         try {
             const formData = new FormData();
 
-            // Add file or YouTube video path
-            if (rawFile) {
-                formData.append('file', rawFile);
-            } else if (downloadedVideoPath) {
-                // Use YouTube downloaded video
-                formData.append('youtube_video_path', downloadedVideoPath);
-            }
-
-            // Helper to get full language name if needed, or code. 
-            // The backend likely expects full English names based on app.py
+            // Helper to get full language name
             const getLangName = (code) => {
                 const l = languages.find(x => x.code === code);
-                return l ? l.name : code;
-            }
+                return l ? l.name : (code || 'Unknown');
+            };
 
-            formData.append('source_lang', sourceLanguage === 'auto' || !sourceLanguage ? 'Automatic' : getLangName(sourceLanguage));
+            formData.append('source_lang', sourceLanguage === 'auto' || !sourceLanguage ? 'auto' : getLangName(sourceLanguage));
             formData.append('target_lang', getLangName(targetLanguage));
             formData.append('gender', speakerGender || 'Male');
-            formData.append('recover_bg', recoverBackgroundNoise);
-            formData.append('user_known_languages', "[]");
+            formData.append('recover_bg', recoverBackgroundNoise ? 'true' : 'false');
 
+            // Determine endpoint and attach file
+            let endpoint = '/upload';
+            if (rawFile) {
+                formData.append('file', rawFile);
+                endpoint = '/upload';
+            } else if (downloadedVideoPath) {
+                // YouTube-downloaded video: use /dub_video which accepts youtube_video_path
+                formData.append('youtube_video_path', downloadedVideoPath);
+                endpoint = '/dub_video';
+            } else {
+                setIsProcessing(false);
+                alert('Please upload a video file or download a YouTube video first.');
+                return;
+            }
 
             // Progress simulation (Initial Upload)
             const progressInterval = setInterval(() => {
@@ -375,7 +379,7 @@ const InputPage = () => {
                 });
             }, 800);
 
-            const response = await fetch('http://localhost:8000/upload', {
+            const response = await fetch(endpoint, {
                 method: 'POST',
                 body: formData,
             });
@@ -383,8 +387,8 @@ const InputPage = () => {
             clearInterval(progressInterval);
 
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Processing failed');
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `Server error: ${response.status}`);
             }
 
             const data = await response.json();
@@ -394,7 +398,7 @@ const InputPage = () => {
                 const taskId = data.task_id;
                 const pollInterval = setInterval(async () => {
                     try {
-                        const statusRes = await fetch(`http://localhost:8000/task/${taskId}`);
+                        const statusRes = await fetch(`/task/${taskId}`);
                         if (!statusRes.ok) return;
                         const statusData = await statusRes.json();
 
@@ -404,32 +408,27 @@ const InputPage = () => {
                             setIsProcessing(false);
 
                             const result = statusData.result || {};
-                            // Navigate to preview page with REAL video data
-                            // Result might contain: output_path, etc.
-                            // Assuming result structure: { "result": "path/to/video.mp4" }
-                            // Adjusting based on whatever process_stage4 returns.
-                            // Currently stage4 return value is not explicitly viewed, but likely a dict or path.
-
-                            // Construct URLs based on simple static serve or similar.
-                            // The backend doesn't seem to serve files statically yet or we need to know the URL.
-                            // Let's assume /download endpoint can serve it or just direct link if static.
-                            // For now, let's use a placeholder or the result directly if it's a URL.
-
-                            const videoUrl = result.output_video ? `http://localhost:8000/download/${result.output_video}` : '';
+                            // stage4 returns { final_video_path, status, job_id }
+                            const finalVideoFile = result.final_video_path
+                                ? result.final_video_path.split(/[\\/]/).pop()
+                                : null;
+                            const outputVideoUrl = finalVideoFile
+                                ? `/download/${encodeURIComponent(finalVideoFile)}`
+                                : '';
 
                             navigate('/preview', {
                                 state: {
-                                    videoUrl: videoUrl,
-                                    originalVideoUrl: null, // We don't have this easily unless returned
+                                    videoUrl: outputVideoUrl,
+                                    originalVideoUrl: null,
                                     language: targetLanguage,
                                     gender: speakerGender,
                                     metadata: {
-                                        originalLanguage: getLangName(sourceLanguage) || "Detected",
+                                        originalLanguage: getLangName(sourceLanguage) || 'Auto-Detected',
                                         dubbedLanguage: getLangName(targetLanguage),
-                                        duration: uploadedVideo?.duration || "Unknown",
-                                        status: "Synced Successfully"
-                                    }
-                                }
+                                        duration: uploadedVideo?.duration || 'Unknown',
+                                        status: 'Synced Successfully',
+                                    },
+                                },
                             });
                         } else if (statusData.status === 'FAILURE' || statusData.status === 'REVOKED') {
                             clearInterval(pollInterval);
@@ -440,12 +439,12 @@ const InputPage = () => {
                             setProcessingProgress(prev => (prev < 98 ? prev + 1 : prev));
                         }
                     } catch (e) {
-                        console.error("Polling error:", e);
+                        console.error('Polling error:', e);
                     }
                 }, 3000);
             } else {
                 setIsProcessing(false);
-                throw new Error("Invalid response from server");
+                throw new Error('Invalid response from server — no task_id returned');
             }
 
         } catch (error) {

@@ -35,7 +35,7 @@ class GenderDetector:
         self.sample_rate = sample_rate
         
         # Default model paths
-        default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "models", "gender"))
+        default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models", "gender"))
         self.model_path = model_path or os.path.join(default_dir, "gender_lgbm.pkl")
         self.encoder_path = encoder_path or os.path.join(default_dir, "label_encoder.pkl")
         

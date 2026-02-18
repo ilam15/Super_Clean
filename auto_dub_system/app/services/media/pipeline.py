@@ -1,7 +1,7 @@
 import tempfile
 import os
-from mixer import FastAudioMixer
-from merger import VideoAudioMerger
+from app.services.media.mixer import FastAudioMixer
+from app.services.media.merger import VideoAudioMerger
 
 
 class RenderPipeline:

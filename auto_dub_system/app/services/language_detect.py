@@ -1,9 +1,10 @@
 import os
 import re
+import logging
 import urllib.request
 from typing import Tuple
-from src.core.config import settings
-from src.core.logger import logger
+
+logger = logging.getLogger(__name__)
 
 try:
     import fasttext
@@ -23,20 +24,23 @@ class LanguageIdentifier:
             return cls._model
 
         if not FASTTEXT_AVAILABLE:
+            logger.warning("fasttext not installed. Language detection will use fallback only.")
             return None
 
-        model_dir = os.path.join(settings.BASE_DIR, "engine", "lid")
+        # Use a local directory relative to this file
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        model_dir = os.path.join(base_dir, "data", "lid")
         os.makedirs(model_dir, exist_ok=True)
         cls._model_path = os.path.join(model_dir, "lid.176.bin")
 
         if not os.path.exists(cls._model_path):
-            logger.info("Initializing fastText download at shared location...")
+            logger.info("Downloading fastText LID model...")
             try:
                 urllib.request.urlretrieve(
                     "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin",
                     cls._model_path
                 )
-                logger.info("Shared fastText model downloaded successfully")
+                logger.info("fastText model downloaded successfully")
             except Exception as e:
                 logger.warning(f"Failed to download fastText model: {e}")
                 return None
@@ -50,7 +54,6 @@ class LanguageIdentifier:
             cls._model = None
 
         return cls._model
-
 
     @staticmethod
     def identify(text: str, whisper_hint: str = None, whisper_prob: float = 0.0) -> Tuple[str, float, str]:

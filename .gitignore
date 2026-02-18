@@ -1,0 +1,16 @@
+/node_modules
+/venv
+.env
+__pycache__
+
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+*.aac
+*.opus
+*.webm
+*.mkv
+*.avi
+*.mp4

@@ -60,6 +60,28 @@ class SpeakerDiarizer:
     def __init__(self, model: str = "pyannote/speaker-diarization-3.1", 
                  token: Optional[str] = None, device: str = "cpu"):
         try:
+            import torchaudio
+            import numpy as np
+            
+            # Patch for torchaudio >= 2.1
+            if not hasattr(torchaudio, "set_audio_backend"):
+                torchaudio.set_audio_backend = lambda x: None
+
+            # Patch for numpy 2.0
+            if not hasattr(np, "NaN"):
+                np.NaN = np.nan
+
+            # Patch huggingface_hub for pyannote compatibility
+            import huggingface_hub
+            if not hasattr(huggingface_hub, "_patched_download"):
+                original_download = huggingface_hub.hf_hub_download
+                def patched_download(*args, **kwargs):
+                    if 'use_auth_token' in kwargs:
+                        kwargs['token'] = kwargs.pop('use_auth_token')
+                    return original_download(*args, **kwargs)
+                huggingface_hub.hf_hub_download = patched_download
+                huggingface_hub._patched_download = True
+
             from pyannote.audio import Pipeline
             import torch
             

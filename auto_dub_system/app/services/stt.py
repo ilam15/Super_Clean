@@ -1,5 +1,4 @@
 def speech_to_text(
-    self,
     chunk_path: str,
     start_time: float,
     end_time: float,
@@ -18,9 +17,13 @@ def speech_to_text(
         text,start_time,end_time,speaker_no,overlap,gender
     """
 
-    try:
-        import requests
+    import requests
+    import logging
+    from app.config import settings
 
+    logger = logging.getLogger(__name__)
+
+    try:
         # --------------------------
         # SARVAM API CONFIG
         # --------------------------

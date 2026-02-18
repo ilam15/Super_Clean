@@ -319,5 +319,60 @@ class ChunkingManager:
         return output_path
 
 
+    # =====================================================
+    # LAYER 1: CHUNK SEPARATION
+    # =====================================================
+    @classmethod
+    def chunk_separation(cls, segment_path, start, end, speaker_no, overlap, chunk_sec=5):
+        """
+        Splits a segment into smaller fixed-size chunks (e.g., 5s)
+        Returns list of chunk metadata.
+        """
+        import soundfile as sf
+        
+        if not os.path.exists(segment_path):
+            raise FileNotFoundError(segment_path)
+            
+        chunks_metadata = []
+        
+        # Load audio (using librosa or soundfile)
+        # Using librosa for consistency or static ffmpeg
+        # Let's use ffmpeg based generator for efficiency or just pydub/librosa for simplicity
+        # implementation using existing audio_chunks generator
+        
+        # audio_chunks yields numpy arrays
+        sr = 16000
+        gen = cls.audio_chunks(segment_path, sr=sr, chunk_sec=chunk_sec)
+        
+        base_name = os.path.splitext(os.path.basename(segment_path))[0]
+        output_dir = os.path.dirname(segment_path)
+        
+        current_time = start
+        
+        for i, audio_data in enumerate(gen):
+            chunk_dur = len(audio_data) / sr
+            chunk_filename = f"{base_name}_chunk_{i:04d}.wav"
+            chunk_path = os.path.join(output_dir, chunk_filename)
+            
+            # Save chunk
+            sf.write(chunk_path, audio_data, sr)
+            
+            chunks_metadata.append({
+                "chunk_path": chunk_path,
+                "start_time": round(current_time, 3),
+                "end_time": round(current_time + chunk_dur, 3),
+                "speaker_no": speaker_no,
+                "overlap": overlap
+            })
+            
+            current_time += chunk_dur
+            
+        return chunks_metadata
+
+
+# Standalone wrapper to match import in stage1_tasks
+def chunk_separation(segment_path, start, end, speaker_no, overlap):
+    return ChunkingManager.chunk_separation(segment_path, start, end, speaker_no, overlap)
+
 # auto init
 ChunkingManager.initialize()

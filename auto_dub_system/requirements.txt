@@ -12,7 +12,7 @@ celery
 redis
 
 # Audio Processing
-numpy
+numpy<2.1.0
 librosa
 soundfile
 pydub

@@ -25,6 +25,19 @@ def text_to_speech(
         from app.config import settings
 
         os.makedirs(output_dir, exist_ok=True)
+        
+        # -------------------------
+        # SKIP IF EMPTY OR SYMBOLS ONLY
+        # -------------------------
+        clean_text = "".join(c for c in aligned_text if c.isalnum())
+        if not clean_text:
+            return {
+                "audio_path": None,
+                "start_time": round(start_time, 2),
+                "end_time": round(end_time, 2),
+                "speaker_no": speaker_no,
+                "overlap": overlap
+            }
 
         # -------------------------
         # VOICE SELECTION

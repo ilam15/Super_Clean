@@ -15,10 +15,10 @@ if %ERRORLEVEL% NEQ 0 (
 timeout /t 2 >nul
 
 echo [2/3] Starting Celery Worker...
-start "Celery Worker" cmd /k "title Celery Worker && set PYTHONPATH=. && celery -A app.tasks.celery_app worker --loglevel=info --pool=solo"
+start "Celery Worker" cmd /k "title Celery Worker && set PYTHONPATH=. && py -3.11 -m celery -A app.tasks.celery_app worker --loglevel=info --pool=solo"
 
 echo [3/3] Starting FastAPI App...
-start "FastAPI Server" cmd /k "title FastAPI Server && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+start "FastAPI Server" cmd /k "title FastAPI Server && py -3.11 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
 echo.
 echo Pipeline is running!

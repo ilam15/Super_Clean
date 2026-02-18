@@ -12,17 +12,19 @@ from app.services.tts import text_to_speech
 
 @celery_app.task
 def task_gender(chunk):
-    # Canonical gender is now pre-assigned in stage1.
-    # We only predict if it's missing or unknown.
-    if chunk.get("gender") and chunk["gender"] != "unknown":
-        return chunk
+    # Determine gender for this chunk
+    from app.services.gender_detection import GenderDetector
+    import logging
+    logger = logging.getLogger(__name__)
 
     detector = GenderDetector()
     try:
         gender_res = detector.predict(chunk["chunk_path"])
         chunk["gender"] = gender_res.get("gender", "male")
+        logger.info(f"Chunk {chunk['chunk_path']} predicted gender: {chunk['gender']} (conf: {gender_res.get('confidence', 0.0):.2f})")
     except Exception as e:
-        chunk["gender"] = "male"
+        logger.error(f"Gender detection failed for chunk {chunk['chunk_path']}: {e}")
+        chunk["gender"] = "male" # Default fallback
     return chunk
 
 @celery_app.task
@@ -93,25 +95,9 @@ def process_stage2(self, stage1_result):
         )
         chunk_chains.append(c)
         
-    # Create a chord: execute chunk_chains in parallel (group), then call process_stage3
-    # Note: chord(header)(callback)
-    callback = process_stage3.s(video_path)
-    workflow = chord(chunk_chains)(callback)
-    
-    # We return the workflow signature. 
-    # Or replace self with this workflow so celery executes it as part of the chain.
-    # self.replace(workflow) is generally safer for deeply nested chains.
-    # However, simply returning the result of calling it (AsyncResult) creates a detached task.
-    # Returning the signature itself: Celery < 5 doesn't execute chained chords automatically if returned.
-    # But usually returning the result of applying the chord works if we are at the end of a chain.
-    
-    # Since process_stage2 is called via link or chain from stage1...
-    # If we return `workflow`, it is a Signature.
-    # We probably want to EXECUTE it and return the AsyncResult, or return the Signature for the caller to execute.
-    # But stage1 executes a chain that *includes* process_stage2.
-    
-    # If process_stage2 is a task in a chain: chain(s1, s2).
-    # s1 returns result. s2 creates subtasks.
-    # The result of s2 becomes the AsyncResult of the sub-workflow if we use replace.
+    # Create a chord: execute chunk_chains in parallel (group), then call process_stage3 -> process_stage4
+    from app.tasks.stage4_tasks import process_stage4
+    callback = (process_stage3.s(video_path) | process_stage4.s())
+    workflow = chord(chunk_chains, body=callback)
     
     return self.replace(workflow)

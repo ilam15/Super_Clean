@@ -5,10 +5,18 @@ Output: timestamps + speaker_labels + speaker_count + overlap
 """
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 import json
+
+# Suppress noisy warnings from specialized libraries
+warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio.core.io")
+warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio.models.blocks.pooling")
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+warnings.filterwarnings("ignore", message=".*torchcodec.*")
+warnings.filterwarnings("ignore", message=".*degrees of freedom.*")
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +94,8 @@ class SpeakerDiarizer:
                     huggingface_hub.snapshot_download = _make_patched(huggingface_hub.snapshot_download)
                 huggingface_hub._patched_for_pyannote = True
 
+            # -----------------------------------------------------------------------
+
             from pyannote.audio import Pipeline
             import torch
             import inspect
@@ -111,42 +121,77 @@ class SpeakerDiarizer:
         tracks = list(diarization.itertracks(yield_label=True))
         for i, (s1, _, _) in enumerate(tracks):
             for s2, _, _ in tracks[i+1:]:
-                if s1.overlaps(s2):
-                    start, end = max(s1.start, s2.start), min(s1.end, s2.end)
-                    if end > start:
-                        overlaps.add((start, end))
+                # Manual overlap check: [s1.start, s1.end] and [s2.start, s2.end]
+                start = max(s1.start, s2.start)
+                end = min(s1.end, s2.end)
+                if end > start:
+                    overlaps.add((start, end))
         return sorted(overlaps)
     
     def _build_segments(self, diarization, overlaps) -> List[SpeakerSegment]:
         segments = []
         for seg, _, label in diarization.itertracks(yield_label=True):
-            has_overlap = any(not (seg.end <= os or seg.start >= oe) for os, oe in overlaps)
+            # Manual check if this segment intersects with any detected overlap range
+            has_overlap = False
+            for os, oe in overlaps:
+                if max(seg.start, os) < min(seg.end, oe):
+                    has_overlap = True
+                    break
             segments.append(SpeakerSegment(seg.start, seg.end, label, has_overlap))
         return segments
     
     def process(self, audio_path: str) -> DiarizationResult:
+        """
+        Run diarization on the given audio path.
+        Bypasses TorchCodec by loading waveform manually with torchaudio.
+        """
         path = Path(audio_path)
         if not path.is_file():
             raise SpeakerDiarizationError(f"File not found: {audio_path}")
         
-        logger.info(f"Processing: {path.name}")
-        diarization = self.pipeline(str(path))
-        overlaps = self._find_overlaps(diarization)
-        segments = self._build_segments(diarization, overlaps)
+        logger.info(f"Processing (manual load): {path.name}")
         
-        timestamps = [(s.start_time, s.end_time) for s in segments]
-        labels = [s.speaker_label for s in segments]
-        
-        result = DiarizationResult(
-            timestamps=timestamps,
-            speaker_labels=labels,
-            speaker_count=len(set(labels)),
-            overlap=len(overlaps) > 0,
-            segments=segments
-        )
-        
-        logger.info(f"✓ {result.speaker_count} speakers, {len(segments)} segments, overlap: {result.overlap}")
-        return result
+        try:
+            import torchaudio
+            import torch
+            
+            # 1. Load waveform manually (Bypasses TorchCodec/AudioDecoder)
+            waveform, sample_rate = torchaudio.load(str(path))
+            
+            # Ensure it's in the correct format for pyannote (channels, time)
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+            # 2. Pass dict to pipeline
+            logger.info("Diarization: Running pipeline... (this may take a while on CPU)")
+            diarization = self.pipeline({"waveform": waveform, "sample_rate": sample_rate})
+            logger.info("Diarization: Pipeline finished.")
+            
+            # Handle newer pyannote-audio versions returning a DiarizeOutput object
+            if not hasattr(diarization, "itertracks") and hasattr(diarization, "speaker_diarization"):
+                diarization = diarization.speaker_diarization
+            
+            # 3. Process results
+            overlaps = self._find_overlaps(diarization)
+            segments = self._build_segments(diarization, overlaps)
+            
+            timestamps = [(s.start_time, s.end_time) for s in segments]
+            labels = [s.speaker_label for s in segments]
+            
+            result = DiarizationResult(
+                timestamps=timestamps,
+                speaker_labels=labels,
+                speaker_count=len(set(labels)),
+                overlap=len(overlaps) > 0,
+                segments=segments
+            )
+            
+            logger.info(f"✓ {result.speaker_count} speakers, {len(segments)} segments, overlap: {result.overlap}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Diarization process failed: {e}")
+            raise SpeakerDiarizationError(f"Process failed: {e}")
 
 
 # ============================================================================

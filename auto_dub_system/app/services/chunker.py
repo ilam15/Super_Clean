@@ -219,25 +219,54 @@ class ChunkingManager:
                 f"segment_{sid}.wav"
             )
 
-            temp_file = f"chunk_list_{sid}.txt"
+            temp_file = os.path.join(output_folder, f"chunk_list_{sid}.txt")
 
             with open(temp_file, "w") as f:
                 for chunk in chunks:
-                    f.write(
-                        f"file '{os.path.abspath(chunk['audio_path'])}'\n"
-                    )
+                    path = chunk.get('audio_path')
+                    if not path or not os.path.exists(path):
+                        # Create a silence file if TTS failed
+                        silence_dur = max(chunk["end_time"] - chunk["start_time"], 0.1)
+                        silence_path = os.path.abspath(os.path.join(output_folder, f"silence_{sid}_{chunks.index(chunk)}.wav"))
+                        
+                        # Generate silence using FFmpeg
+                        command_silence = [
+                            cls.FFMPEG,
+                            "-f", "lavfi",
+                            "-i", f"anullsrc=r=22050:cl=mono",
+                            "-t", str(silence_dur),
+                            "-y",
+                            silence_path
+                        ]
+                        subprocess.run(command_silence, check=True, capture_output=True)
+                        path = silence_path
+                    
+                    f.write(f"file '{os.path.abspath(path)}'\n")
 
             command = [
                 cls.FFMPEG,
                 "-f", "concat",
                 "-safe", "0",
                 "-i", temp_file,
-                "-c", "copy",
+                "-acodec", "pcm_s16le",
+                "-ar", "22050",
+                "-ac", "1",
                 "-y",
                 segment_path
             ]
 
             subprocess.run(command, check=True)
+            
+            # Clean up silence files created for this segment
+            # (In a production system you might want to cache these, but for now we clean up)
+            with open(temp_file, "r") as f:
+                for line in f:
+                    if "silence_" in line:
+                        sil_path = line.strip().split("'")[1]
+                        if os.path.exists(sil_path):
+                            try: os.remove(sil_path)
+                            except: pass
+
             os.remove(temp_file)
 
             segment_outputs.append({
@@ -285,7 +314,9 @@ class ChunkingManager:
             "-f", "concat",
             "-safe", "0",
             "-i", temp_file,
-            "-c", "copy",
+            "-acodec", "pcm_s16le",
+            "-ar", "22050",
+            "-ac", "1",
             "-y",
             output_path
         ]
@@ -317,6 +348,8 @@ class ChunkingManager:
             "-i", video_path,
             "-i", final_audio_path,
             "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-shortest",

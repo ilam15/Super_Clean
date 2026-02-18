@@ -77,13 +77,21 @@ def text_to_speech(
         response = requests.post(url, headers=headers, json=payload)
 
         if response.status_code != 200:
-            raise Exception(response.text)
+            raise Exception(f"Sarvam API Error {response.status_code}: {response.text}")
 
         # -------------------------
         # SAVE AUDIO
         # -------------------------
-        with open(audio_path, "wb") as f:
-            f.write(response.content)
+        # Sarvam API returns a JSON with base64 encoded audio strings in the 'audios' field
+        import base64
+        result = response.json()
+        if "audios" in result and len(result["audios"]) > 0:
+            audio_base64 = result["audios"][0]
+            audio_bytes = base64.b64decode(audio_base64)
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+        else:
+            raise Exception(f"No audio data in Sarvam response: {result}")
 
         # -------------------------
         # OUTPUT STRUCTURE

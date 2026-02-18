@@ -286,45 +286,73 @@ class ChunkingManager:
     @classmethod
     def final_audio_connect(cls, segments_data, output_path="final_audio.wav"):
         """
-        Merges all segment files into one final audio file
-        in timeline order.
+        Merges all segment files into one final audio file in timeline order,
+        inserting silence gaps to maintain synchronization with the video.
         """
-
         if not segments_data:
             raise ValueError("No segment data provided")
 
-        # 1️⃣ Sort segments by start time
-        segments_data = sorted(
-            segments_data,
-            key=lambda x: x["start_time"]
-        )
+        # Sort segments by start time
+        segments_data = sorted(segments_data, key=lambda x: x["start_time"])
 
         temp_file = "segment_list.txt"
+        output_folder = os.path.dirname(output_path) or "."
+        os.makedirs(output_folder, exist_ok=True)
+        
+        silence_files = []
 
-        # 2️⃣ Create FFmpeg concat list
-        with open(temp_file, "w") as f:
-            for segment in segments_data:
-                f.write(
-                    f"file '{os.path.abspath(segment['segment_path'])}'\n"
-                )
+        try:
+            with open(temp_file, "w") as f:
+                current_time = 0.0
+                
+                for idx, segment in enumerate(segments_data):
+                    start_time = segment["start_time"]
+                    
+                    # 1. Fill gap before this segment with silence
+                    if start_time > current_time + 0.001:
+                        gap_dur = start_time - current_time
+                        silence_path = os.path.abspath(os.path.join(output_folder, f"gap_silence_{idx}.wav"))
+                        
+                        cmd_silence = [
+                            cls.FFMPEG, "-f", "lavfi",
+                            "-i", "anullsrc=r=22050:cl=mono",
+                            "-t", str(round(gap_dur, 3)),
+                            "-y", silence_path
+                        ]
+                        subprocess.run(cmd_silence, check=True, capture_output=True)
+                        f.write(f"file '{silence_path}'\n")
+                        silence_files.append(silence_path)
+                    
+                    # 2. Add the dubbed segment
+                    seg_path = os.path.abspath(segment['segment_path'])
+                    f.write(f"file '{seg_path}'\n")
+                    
+                    # Update current_time based on segment end_time
+                    # (Note: we use end_time from metadata to ensure sync even if audio file dur is slightly off)
+                    current_time = segment["end_time"]
 
-        # 3️⃣ Run FFmpeg merge
-        command = [
-            cls.FFMPEG,
-            "-f", "concat",
-            "-safe", "0",
-            "-i", temp_file,
-            "-acodec", "pcm_s16le",
-            "-ar", "22050",
-            "-ac", "1",
-            "-y",
-            output_path
-        ]
+            # Run FFmpeg merge
+            command = [
+                cls.FFMPEG,
+                "-f", "concat",
+                "-safe", "0",
+                "-i", temp_file,
+                "-acodec", "pcm_s16le",
+                "-ar", "22050",
+                "-ac", "1",
+                "-y",
+                output_path
+            ]
+            subprocess.run(command, check=True, capture_output=True)
 
-        subprocess.run(command, check=True)
-
-        # 4️⃣ Remove temp file
-        os.remove(temp_file)
+        finally:
+            # Cleanup
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            for sil_path in silence_files:
+                if os.path.exists(sil_path):
+                    try: os.remove(sil_path)
+                    except: pass
 
         return output_path
 
@@ -339,25 +367,24 @@ class ChunkingManager:
         output_path="final_video.mp4"
     ):
         """
-        Replaces original audio with dubbed audio.
+        Muxes the dubbed audio with the video.
         """
-
+        # Improved command with explicit mapping and aac encoding
         command = [
             cls.FFMPEG,
-            "-y",  # auto overwrite
+            "-y",
             "-i", video_path,
             "-i", final_audio_path,
-            "-c:v", "copy",
-            "-c:a", "aac",
+            "-c:v", "copy",     # Stream copy video
+            "-c:a", "aac",      # Encode dubbed audio to AAC
             "-b:a", "192k",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-shortest",
+            "-map", "0:v:0",    # Take first video stream from first input
+            "-map", "1:a:0",    # Take first audio stream from second input (dubbed)
+            "-shortest",        # End when the shortest stream ends
             output_path
         ]
 
-        subprocess.run(command, check=True)
-
+        subprocess.run(command, check=True, capture_output=True)
         return output_path
 
 

@@ -45,8 +45,8 @@ def speech_to_text(
         }
 
         data = {
-            "model": "saaras:v1",
-            "translate": "true", # string "true" is safer for some multipart parsers
+            "model": "saarika:v2.5",
+            "translate": "true",
             "target_language": "en"
         }
 
@@ -56,20 +56,20 @@ def speech_to_text(
         response = requests.post(url, headers=headers, files=files, data=data)
         
         if response.status_code != 200:
-            logger.error(f"Sarvam API error {response.status_code}: {response.text}")
-            return {
-                "text": "",
-                "start_time": start_time,
-                "end_time": end_time,
-                "speaker_no": speaker_no,
-                "overlap": overlap,
-                "gender": gender
-            }
+            error_msg = f"Sarvam STT API error {response.status_code}: {response.text}"
+            logger.error(error_msg)
+            # Raise exception so Celery marks the task as failed (easier to debug)
+            raise Exception(error_msg)
 
         result = response.json()
         logger.info(f"Sarvam STT result for {chunk_path}: {result}")
 
         final_text = result.get("transcript", "")
+
+        if not final_text.strip():
+            logger.warning(f"STT returned empty transcript for chunk: {chunk_path}")
+            # Optional: raise error if you want to strictly fail on silence/empty outputs
+            # raise ValueError("STT failed — empty transcription returned")
 
         # --------------------------
         # OUTPUT FORMAT
@@ -85,11 +85,5 @@ def speech_to_text(
 
     except Exception as e:
         logger.error(f"Sarvam STT failed: {e}")
-        return {
-            "text": "",
-            "start_time": start_time,
-            "end_time": end_time,
-            "speaker_no": speaker_no,
-            "overlap": overlap,
-            "gender": gender
-        }
+        # Re-raise to let Celery handle the failure visibility
+        raise

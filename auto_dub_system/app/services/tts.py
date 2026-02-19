@@ -122,50 +122,57 @@ def text_to_speech(
         # SPEED ADJUSTMENT (LIPSYNC)
         # -------------------------
         try:
-            import librosa
+            from pathlib import Path
             import soundfile as sf
             import subprocess
             import shutil
 
-            ffmpeg_cmd = shutil.which("ffmpeg") or "ffmpeg"
-            
-            # Check original vs tts duration
-            orig_dur = end_time - start_time
-            if orig_dur <= 0:
-                orig_dur = 0.1
-                
-            y, sr = librosa.load(audio_path, sr=None)
-            tts_dur = len(y) / sr
-            
+            ffmpeg_cmd = shutil.which("ffmpeg")
+            if not ffmpeg_cmd:
+                raise RuntimeError("FFmpeg not found in PATH")
+
+            orig_dur = max(end_time - start_time, 0.1)
+
+            info = sf.info(audio_path)
+            if info.samplerate == 0:
+                raise ValueError("Invalid sample rate")
+
+            tts_dur = info.frames / info.samplerate
+
             speed = tts_dur / orig_dur
-            
-            # atempo limit is [0.5, 2.0]. Chain them if needed.
+            speed = max(0.1, min(speed, 10))
+
             filters = []
             temp_speed = speed
+
             while temp_speed > 2.0:
                 filters.append("atempo=2.0")
                 temp_speed /= 2.0
+
             while temp_speed < 0.5:
                 filters.append("atempo=0.5")
                 temp_speed /= 0.5
-            if temp_speed != 1.0:
+
+            if abs(temp_speed - 1.0) > 1e-3:
                 filters.append(f"atempo={temp_speed:.3f}")
-            
+
             if filters:
-                logger.info(f"Adjusting speed: tts_dur={tts_dur:.2f}, target_dur={orig_dur:.2f}, speed={speed:.2f}")
+                p = Path(audio_path)
+                out_path = str(p.with_name(p.stem + "_synced.wav"))
+
                 filter_str = ",".join(filters)
-                out_path = audio_path.replace(".wav", "_synced.wav")
-                
+
                 cmd = [
                     ffmpeg_cmd, "-y", "-i", audio_path,
                     "-filter:a", filter_str,
                     out_path
                 ]
-                subprocess.run(cmd, check=True, capture_output=True)
+
+                subprocess.run(cmd, check=True)
                 audio_path = out_path
-            
-        except Exception as speed_err:
-            logger.error(f"Lipsync speed adjustment failed: {speed_err}")
+
+        except Exception as e:
+            logger.warning(f"Speed adjustment failed: {e}")
 
         # -------------------------
         # OUTPUT STRUCTURE

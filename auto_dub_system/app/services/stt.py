@@ -60,6 +60,36 @@ def sarvam_translate(text: str, source_lang: str, target_lang: str) -> str:
                 return text
     return text
 
+
+def faster_whisper_stt(audio_path, model_size="medium", device="auto", compute_type="int8"):
+    """
+    Fallback STT using local faster-whisper model.
+    """
+    import logging
+    from faster_whisper import WhisperModel
+    import torch
+
+    logger = logging.getLogger(__name__)
+
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    try:
+        logger.info(f"Loading faster-whisper model ({model_size}) on {device}...")
+        # Run on CPU with int8 if no CUDA, or float16 on CUDA if supported
+        if device == "cpu":
+            compute_type = "int8"
+        
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        segments, info = model.transcribe(audio_path, beam_size=5)
+        
+        text = " ".join([segment.text for segment in segments])
+        logger.info(f"Faster-Whisper transcribed: {text[:50]}... (Language: {info.language})")
+        return text.strip(), info.language
+    except Exception as e:
+        logger.error(f"Faster-Whisper failed: {e}")
+        raise
+
 def speech_to_text(
     chunk_path: str,
     start_time: float,
@@ -71,7 +101,8 @@ def speech_to_text(
     source_lang: str = "auto"
 ):
     """
-    Production-ready STT using Sarvam saaras:v3 with audio normalization and robust error handling.
+    Production-ready STT using Sarvam saaras:v3 with fallback to faster-whisper.
+    Includes robust error handling, retries, and timeouts.
     """
     import os
     import requests
@@ -80,19 +111,24 @@ def speech_to_text(
     import audioop
     import time
     from app.config import settings
+    from app.services.language_detect import LanguageIdentifier
 
     logger = logging.getLogger(__name__)
     duration = end_time - start_time
+    
+    start_process_time = time.time()
+    logger.info(f"STT Processing started for chunk (Duration: {duration:.2f}s)")
 
-    # 1. Enforce Minimum Duration (Step 2)
+    # 1. Enforce Minimum Duration
     if duration < 0.5:
         logger.warning(f"Chunk too short ({duration:.2f}s) for reliable STT. Skipping.")
         return {
-            "text": "", "start_time": start_time, "end_time": end_time,
+            "text": "", "detected_lang": "", "confidence": 0.0,
+            "start_time": start_time, "end_time": end_time,
             "speaker_no": speaker_no, "overlap": overlap, "gender": gender
         }
 
-    # 2. Silence Filter (Step 8)
+    # 2. Silence Filter
     try:
         if os.path.exists(chunk_path):
             with wave.open(chunk_path, 'rb') as wf:
@@ -103,29 +139,34 @@ def speech_to_text(
                     if rms < 200:
                         logger.info(f"Silence detected (RMS: {rms}). Skipping STT.")
                         return {
-                            "text": "", "start_time": start_time, "end_time": end_time,
+                            "text": "", "detected_lang": "", "confidence": 0.0,
+                            "start_time": start_time, "end_time": end_time,
                             "speaker_no": speaker_no, "overlap": overlap, "gender": gender
                         }
     except Exception as silence_err:
         logger.warning(f"Silence check failed: {silence_err}")
 
+    # 3. Normalize Audio
+    norm_path = chunk_path.replace(".wav", "_norm.wav")
     try:
-        # 3. Normalize Audio (Step 1)
-        norm_path = chunk_path.replace(".wav", "_norm.wav")
         normalize_audio(chunk_path, norm_path)
         
-        # 4. API Config
-        url = "https://api.sarvam.ai/speech-to-text"
-        headers = {"api-subscription-key": settings.SARVAM_API_KEY}
+        final_text = ""
+        det_lang = "en"  # Default
         
-        with open(norm_path, "rb") as f:
-            audio_bytes = f.read()
-        files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
-
-        # 5. Correct API Payload (STT Only)
+        # --- SARVAM STT BLOCK ---
+        sarvam_success = False
+        
+        url = "https://api.sarvam.ai/speech-to-text"
+        headers = {
+            "api-subscription-key": settings.SARVAM_API_KEY,
+            "Connection": "close"  # Prevent dead connections
+        }
+        
+        # Prepare Data
         data = {
             "model": "saaras:v3",
-            "translate": False, # Get original text first for better LID
+            "translate": False, # Get original text
             "punctuate": True
         }
         if source_lang != "auto":
@@ -133,65 +174,78 @@ def speech_to_text(
         else:
             data["auto_detect"] = True
 
-        # 6. API Call with Timeout and Retries
-        max_retries = 3
-        retry_delay = 5
-        response = None
+        MAX_RETRIES = 3
         
-        for attempt in range(max_retries):
+        for attempt in range(MAX_RETRIES):
             try:
-                # Re-open the file handle if it was closed or needs to be reset
+                # Re-open file for each attempt to reset pointer
                 with open(norm_path, "rb") as f:
-                    audio_bytes = f.read()
-                files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
-                
-                response = requests.post(url, headers=headers, files=files, data=data, timeout=180)
-                if response.status_code == 200:
-                    break
-                else:
-                    logger.warning(f"Sarvam STT Attempt {attempt+1} failed with code {response.status_code}")
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (attempt + 1))
-            except Exception as conn_err:
-                logger.warning(f"Sarvam STT Attempt {attempt+1} connection error: {conn_err}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay * (attempt + 1))
-                else:
-                    raise conn_err
+                    files = {"file": ("audio.wav", f, "audio/wav")}
+                    
+                    st_time = time.time()
+                    response = requests.post(
+                        url, 
+                        headers=headers, 
+                        files=files, 
+                        data=data, 
+                        timeout=(5, 30) # (connect, read)
+                    )
+                    
+                    elapsed = time.time() - st_time
+                    logger.info(f"Sarvam API response time (Attempt {attempt+1}): {elapsed:.2f}s")
+                    
+                    response.raise_for_status() # Check for 4xx/5xx
+                    
+                    result = response.json()
+                    final_text = result.get("transcript", "")
+                    sarvam_success = True
+                    break # Success!
+                    
+            except Exception as e:
+                logger.warning(f"Sarvam STT Attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(2 ** attempt) # Exponential backoff: 1s, 2s, 4s...
         
-        if not response or response.status_code != 200:
-            error_msg = f"Sarvam STT Error after {max_retries} attempts: {response.status_code if response else 'No Response'}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
+        # --- FALLBACK BLOCK ---
+        if not sarvam_success:
+            logger.warning("Sarvam failed or timed out. Falling back to faster-whisper.")
+            try:
+                final_text, detected_code = faster_whisper_stt(norm_path)
+                # Ensure detected_code is used if we can capture it, though LanguageIdentifier below does a better job usually
+            except Exception as fw_err:
+                logger.error(f"Faster-Whisper fallback also failed: {fw_err}")
+                final_text = ""
 
-        result = response.json()
+        # 4. Result Processing
+        if not final_text:
+            logger.warning("No transcript generated.")
+            return {
+                "text": "", "detected_lang": "", "confidence": 0.0,
+                "start_time": start_time, "end_time": end_time,
+                "speaker_no": speaker_no, "overlap": overlap, "gender": gender
+            }
 
-        # 7. Validate Detection Result (Steps 6, 9)
-        final_text = result.get("transcript", "")
-        
-        # FIX #1: Language Identification
-        from app.services.language_detect import LanguageIdentifier
+        # Language Detection
         det_lang, conf, reason = LanguageIdentifier.identify(final_text)
         
-        # FIX #5: Debug Logging
         logger.info(f"""
-        Detected: {det_lang}
-        Target: {target_lang}
-        Text: {final_text}
+        STT Result:
+        - Text: {final_text[:100]}...
+        - Detected Lang: {det_lang} (Conf: {conf})
+        - Target Lag: {target_lang}
         """)
 
-        # FIX #4: Skip Translation If Same Language
-        if det_lang == target_lang:
-            logger.info(f"Source ({det_lang}) matches target ({target_lang}). Skipping translation.")
-            translated_text = final_text
+        # Translation Logic
+        translated_text = final_text
+        if det_lang != target_lang:
+             logger.info(f"Translating {det_lang} -> {target_lang}")
+             # Use the simple translation helper
+             translated_text = sarvam_translate(final_text, det_lang, target_lang)
         else:
-            # FIX #2: Use detected language for translation
-            logger.info(f"Translating {det_lang} -> {target_lang}")
-            translated_text = sarvam_translate(final_text, det_lang, target_lang)
+             logger.info("Source matches target. Skipping translation.")
 
-        # Cleanup normalized file
-        if os.path.exists(norm_path):
-            os.remove(norm_path)
+        total_elapsed = time.time() - start_process_time
+        logger.info(f"Total STT Task Duration: {total_elapsed:.2f}s")
 
         return {
             "text": translated_text,
@@ -205,5 +259,17 @@ def speech_to_text(
         }
 
     except Exception as e:
-        logger.error(f"Sarvam STT process failed: {e}")
-        raise
+        logger.error(f"STT process failed completely: {e}")
+        # Return empty safe result instead of crashing the pipeline
+        return {
+            "text": "", "detected_lang": "error", "confidence": 0.0,
+            "start_time": start_time, "end_time": end_time,
+            "speaker_no": speaker_no, "overlap": overlap, "gender": gender
+        }
+    finally:
+        # Cleanup
+        if os.path.exists(norm_path):
+            try:
+                os.remove(norm_path)
+            except:
+                pass

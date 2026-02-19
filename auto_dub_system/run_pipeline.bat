@@ -17,10 +17,10 @@ timeout /t 2 >nul
 echo [2/3] Starting Celery Worker...
 :: NOTE: On Windows, --pool=solo is used for stability. 
 :: For production parallelism, use WSL/Linux and run with: --pool=prefork -c 12
-start "Celery Worker" cmd /k "title Celery Worker && set PYTHONPATH=. && py -3.11 -m celery -A app.tasks.celery_app worker --loglevel=info --pool=solo"
+start "Celery Worker" cmd /k "title Celery Worker && set PYTHONPATH=. && ..\venv311\Scripts\python.exe -m celery -A app.tasks.celery_app worker --loglevel=info --pool=solo"
 
 echo [3/3] Starting FastAPI App...
-start "FastAPI Server" cmd /k "title FastAPI Server && py -3.11 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+start "FastAPI Server" cmd /k "title FastAPI Server && ..\venv311\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
 echo.
 echo Pipeline is running!

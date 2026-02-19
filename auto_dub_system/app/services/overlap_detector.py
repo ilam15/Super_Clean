@@ -58,13 +58,25 @@ def overlapping_audio_split(timestamps: List[Tuple[float, float]],
 
 def _demucs(audio: Path, out_dir: Path) -> List[str]:
     """Demucs separation"""
+    import sys
     try:
-        cmd = ["demucs", "-n", "htdemucs", "--two-stems", "vocals",
+        # Use python -m demucs to ensure we use the installed module in current env
+        cmd = [sys.executable, "-m", "demucs", "-n", "htdemucs", "--two-stems", "vocals",
                "-o", str(out_dir), str(audio)]
+        
+        # On Windows, we need to ensure we don't popup a window if running from a GUI service, 
+        # but for Celery plain subprocess.run is usually fine. 
+        # However, shell=False is safer and default.
         subprocess.run(cmd, check=True, capture_output=True, text=True)
         
+        # Demucs output structure: <out_dir>/<model_name>/<audio_stem_name>/vocals.wav
+        # Note: if audio file is "my_song.mp3", stem name is "my_song"
         vocals = out_dir / "htdemucs" / audio.stem / "vocals.wav"
+        
         if not vocals.exists():
+            # Sometimes demucs might output differently depending on version/args
+            # Let's log what we have if it fails
+            logger.error(f"Demucs output not found at {vocals}. Contents of {out_dir}: {list(out_dir.glob('**/*'))}")
             raise AudioSplitError("No output created")
         
         result = [str(vocals)]
@@ -74,6 +86,7 @@ def _demucs(audio: Path, out_dir: Path) -> List[str]:
     except FileNotFoundError:
         raise FileNotFoundError("Install: pip install demucs")
     except subprocess.CalledProcessError as e:
+        logger.error(f"Demucs process failed with error: {e.stderr}")
         raise AudioSplitError(f"Demucs failed: {e.stderr}")
 
 

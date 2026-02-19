@@ -11,25 +11,29 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 import json
 
-# Suppress noisy warnings from specialized libraries
-warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio.core.io")
-warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio.models.blocks.pooling")
-warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
-warnings.filterwarnings("ignore", message=".*torchcodec.*")
-warnings.filterwarnings("ignore", message=".*degrees of freedom.*")
+# Suppress noisy warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 logger = logging.getLogger(__name__)
 
-# Global instance for singleton pattern
+# Singleton instance (per worker process)
 _diarizer_instance = None
 
-def get_diarizer(model: str = "pyannote/speaker-diarization-3.1", 
-                 token: Optional[str] = None, device: str = "cpu"):
-    """Get or create a global SpeakerDiarizer instance (singleton per worker process)."""
+
+# ============================================================================
+# Factory (Singleton)
+# ============================================================================
+
+def get_diarizer(
+    model: str = "pyannote/speaker-diarization-3.1",
+    token: Optional[str] = None,
+    device: str = "cpu",
+):
     global _diarizer_instance
     if _diarizer_instance is None:
         _diarizer_instance = SpeakerDiarizer(model, token, device)
     return _diarizer_instance
+
 
 # ============================================================================
 # Data Structures
@@ -41,7 +45,7 @@ class SpeakerSegment:
     end_time: float
     speaker_label: str
     overlap: bool = False
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -53,16 +57,16 @@ class DiarizationResult:
     speaker_count: int
     overlap: bool
     segments: List[SpeakerSegment]
-    
+
     def to_dict(self) -> dict:
         return {
             "timestamps": self.timestamps,
             "speaker_labels": self.speaker_labels,
             "speaker_count": self.speaker_count,
             "overlap": self.overlap,
-            "segments": [s.to_dict() for s in self.segments]
+            "segments": [s.to_dict() for s in self.segments],
         }
-    
+
     def save_json(self, path: str):
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
 
@@ -72,202 +76,181 @@ class SpeakerDiarizationError(Exception):
 
 
 # ============================================================================
-# Core Logic
+# Core Diarizer
 # ============================================================================
 
 class SpeakerDiarizer:
-    def __init__(self, model: str = "pyannote/speaker-diarization-3.1", 
-                 token: Optional[str] = None, device: str = "cpu"):
+    def __init__(
+        self,
+        model: str = "pyannote/speaker-diarization-3.1",
+        token: Optional[str] = None,
+        device: str = "cpu",
+    ):
         try:
-            import torchaudio
-            import numpy as np
-
-            # Patch for torchaudio >= 2.1 (set_audio_backend was removed)
-            if not hasattr(torchaudio, "set_audio_backend"):
-                torchaudio.set_audio_backend = lambda x: None
-
-            # Patch for numpy 2.0 (np.NaN was removed)
-            if not hasattr(np, "NaN"):
-                np.NaN = np.nan
-
-            # Patch huggingface_hub: pyannote internals may still pass use_auth_token
-            import huggingface_hub
-            if not getattr(huggingface_hub, "_patched_for_pyannote", False):
-                def _make_patched(original_fn):
-                    def patched(*args, **kwargs):
-                        if "use_auth_token" in kwargs:
-                            kwargs["token"] = kwargs.pop("use_auth_token")
-                        return original_fn(*args, **kwargs)
-                    return patched
-
-                huggingface_hub.hf_hub_download = _make_patched(huggingface_hub.hf_hub_download)
-                if hasattr(huggingface_hub, "snapshot_download"):
-                    huggingface_hub.snapshot_download = _make_patched(huggingface_hub.snapshot_download)
-                huggingface_hub._patched_for_pyannote = True
-
-            # -----------------------------------------------------------------------
-
             from pyannote.audio import Pipeline
             import torch
             import inspect
 
-            # pyannote >= 3.x renamed use_auth_token → token in Pipeline.from_pretrained
-            pretrained_sig = inspect.signature(Pipeline.from_pretrained)
-            if "token" in pretrained_sig.parameters:
+            # Handle token argument compatibility
+            sig = inspect.signature(Pipeline.from_pretrained)
+            if "token" in sig.parameters:
                 self.pipeline = Pipeline.from_pretrained(model, token=token)
             else:
-                # Older pyannote still uses use_auth_token
-                self.pipeline = Pipeline.from_pretrained(model, use_auth_token=token)
+                self.pipeline = Pipeline.from_pretrained(
+                    model, use_auth_token=token
+                )
 
-            dev = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
+            dev = torch.device(
+                "cuda" if device == "cuda" and torch.cuda.is_available() else "cpu"
+            )
+
             self.pipeline = self.pipeline.to(dev)
-            logger.info(f"Pipeline ready on {dev}")
-            print(f"INFO: Pyannote Diarization Model ({model}) is ACTIVE on {dev}.")
+
+            logger.info(f"Pyannote pipeline loaded on {dev}")
+            print(f"INFO: Pyannote Diarization Model ({model}) ACTIVE on {dev}")
+
         except ImportError:
-            raise SpeakerDiarizationError("Install: pip install pyannote.audio torch torchaudio")
+            raise SpeakerDiarizationError(
+                "Missing dependency. Install: pip install pyannote.audio torch"
+            )
         except Exception as e:
-            raise SpeakerDiarizationError(f"Init failed: {e}")
-    
+            raise SpeakerDiarizationError(f"Initialization failed: {e}")
+
+    # ---------------------------------------------------------------------
+
     def _find_overlaps(self, diarization) -> List[Tuple[float, float]]:
         overlaps = set()
         tracks = list(diarization.itertracks(yield_label=True))
-        for i, (s1, _, _) in enumerate(tracks):
-            for s2, _, _ in tracks[i+1:]:
-                # Manual overlap check: [s1.start, s1.end] and [s2.start, s2.end]
-                start = max(s1.start, s2.start)
-                end = min(s1.end, s2.end)
+
+        for i, (seg1, _, _) in enumerate(tracks):
+            for seg2, _, _ in tracks[i + 1 :]:
+                start = max(seg1.start, seg2.start)
+                end = min(seg1.end, seg2.end)
                 if end > start:
                     overlaps.add((start, end))
+
         return sorted(overlaps)
-    
+
+    # ---------------------------------------------------------------------
+
     def _build_segments(self, diarization, overlaps) -> List[SpeakerSegment]:
         segments = []
+
         for seg, _, label in diarization.itertracks(yield_label=True):
-            # Manual check if this segment intersects with any detected overlap range
             has_overlap = False
             for os, oe in overlaps:
                 if max(seg.start, os) < min(seg.end, oe):
                     has_overlap = True
                     break
-            segments.append(SpeakerSegment(seg.start, seg.end, label, has_overlap))
+
+            segments.append(
+                SpeakerSegment(
+                    start_time=seg.start,
+                    end_time=seg.end,
+                    speaker_label=label,
+                    overlap=has_overlap,
+                )
+            )
+
         return segments
-    
+
+    # ---------------------------------------------------------------------
+
     def process(self, audio_path: str) -> DiarizationResult:
         """
-        Run diarization on the given audio path.
-        Bypasses TorchCodec by loading waveform manually with torchaudio.
+        Run diarization directly on file path.
+        No torchaudio. No torchcodec.
         """
         path = Path(audio_path)
+
         if not path.is_file():
             raise SpeakerDiarizationError(f"File not found: {audio_path}")
-        
-        logger.info(f"Processing (manual load): {path.name}")
-        
+
+        logger.info(f"Processing: {path.name}")
+
         try:
-            import torchaudio
-            import torch
-            
-            # 1. Load waveform manually (Bypasses TorchCodec/AudioDecoder)
-            waveform, sample_rate = torchaudio.load(str(path))
-            
-            # Ensure it's in the correct format for pyannote (channels, time)
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-            
-            # 2. Pass dict to pipeline
-            logger.info("Diarization: Running pipeline... (this may take a while on CPU)")
-            diarization = self.pipeline({"waveform": waveform, "sample_rate": sample_rate})
-            logger.info("Diarization: Pipeline finished.")
-            
-            # Handle newer pyannote-audio versions returning a DiarizeOutput object
-            if not hasattr(diarization, "itertracks") and hasattr(diarization, "speaker_diarization"):
+            logger.info("Running diarization pipeline...")
+            diarization = self.pipeline(str(path))
+            logger.info("Pipeline finished.")
+
+            # pyannote >=3 sometimes wraps result
+            if not hasattr(diarization, "itertracks") and hasattr(
+                diarization, "speaker_diarization"
+            ):
                 diarization = diarization.speaker_diarization
-            
-            # 3. Process results
+
             overlaps = self._find_overlaps(diarization)
             segments = self._build_segments(diarization, overlaps)
-            
+
             timestamps = [(s.start_time, s.end_time) for s in segments]
             labels = [s.speaker_label for s in segments]
-            
+
             result = DiarizationResult(
                 timestamps=timestamps,
                 speaker_labels=labels,
                 speaker_count=len(set(labels)),
                 overlap=len(overlaps) > 0,
-                segments=segments
+                segments=segments,
             )
-            
-            logger.info(f"✓ {result.speaker_count} speakers, {len(segments)} segments, overlap: {result.overlap}")
+
+            logger.info(
+                f"✓ {result.speaker_count} speakers | "
+                f"{len(segments)} segments | overlap: {result.overlap}"
+            )
+
             return result
-            
+
         except Exception as e:
-            logger.error(f"Diarization process failed: {e}")
+            logger.error(f"Diarization failed: {e}")
             raise SpeakerDiarizationError(f"Process failed: {e}")
 
 
 # ============================================================================
-# Main Interface
+# Public API
 # ============================================================================
 
-def speaker_diarization(full_audio_path: str,
-                       model_name: str = "pyannote/speaker-diarization-3.1",
-                       use_auth_token: Optional[str] = None,
-                       device: str = "cpu",
-                       save_json: bool = False,
-                       output_json_path: Optional[str] = None) -> Dict:
-    """
-    Perform speaker diarization with overlap detection.
-    
-    Returns: {timestamps, speaker_labels, speaker_count, overlap, segments}
-    """
+def speaker_diarization(
+    full_audio_path: str,
+    model_name: str = "pyannote/speaker-diarization-3.1",
+    use_auth_token: Optional[str] = None,
+    device: str = "cpu",
+    save_json: bool = False,
+    output_json_path: Optional[str] = None,
+) -> Dict:
     diarizer = get_diarizer(model_name, use_auth_token, device)
     result = diarizer.process(full_audio_path)
-    
+
     if save_json:
         json_path = output_json_path or f"{Path(full_audio_path).stem}_diarization.json"
         result.save_json(json_path)
-    
+
     return result.to_dict()
 
 
-def check_dependencies() -> Dict[str, bool]:
-    deps = {}
-    for pkg in ['pyannote.audio', 'torch', 'torchaudio']:
-        try:
-            __import__(pkg.replace('.', '_') if '.' in pkg else pkg)
-            deps[pkg] = True
-        except ImportError:
-            deps[pkg] = False
-    return deps
-
-
 # ============================================================================
-# CLI
+# CLI (Optional Testing)
 # ============================================================================
 
 if __name__ == "__main__":
     import sys
-    
-    deps = check_dependencies()
-    if not all(deps.values()):
-        print("❌ Install: pip install pyannote.audio torch torchaudio")
-        sys.exit(1)
-    
+
     if len(sys.argv) < 2:
-        print("Usage: python speaker_diarization.py <audio_file> [hf_token]")
+        print("Usage: python diarization.py <audio_file> [hf_token]")
         sys.exit(0)
-    
+
     try:
         result = speaker_diarization(
             full_audio_path=sys.argv[1],
             use_auth_token=sys.argv[2] if len(sys.argv) > 2 else None,
-            save_json=True
+            save_json=True,
         )
-        print(f"\n✓ Speakers: {result['speaker_count']}, Segments: {len(result['segments'])}, Overlap: {result['overlap']}")
-        for seg in result['segments'][:5]:
-            print(f"  [{seg['start_time']:.2f}s-{seg['end_time']:.2f}s] {seg['speaker_label']}" + 
-                  (" ⚠️" if seg['overlap'] else ""))
+
+        print(
+            f"\n✓ Speakers: {result['speaker_count']}, "
+            f"Segments: {len(result['segments'])}, "
+            f"Overlap: {result['overlap']}"
+        )
+
     except Exception as e:
         print(f"❌ {e}")
         sys.exit(1)

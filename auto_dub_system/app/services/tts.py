@@ -79,17 +79,35 @@ def text_to_speech(
         }
 
         # -------------------------
-        # API CALL
+        # API CALL WITH RETRIES
         # -------------------------
-        response = requests.post(url, headers=headers, json=payload)
+        import time
+        max_retries = 3
+        retry_delay = 3
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
+                if response.status_code == 200:
+                    break
+                else:
+                    logger.warning(f"Sarvam TTS Attempt {attempt+1} failed with code {response.status_code}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay * (attempt + 1))
+            except Exception as conn_err:
+                logger.warning(f"Sarvam TTS Attempt {attempt+1} connection error: {conn_err}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    raise conn_err
 
-        if response.status_code != 200:
-            raise Exception(f"Sarvam API Error {response.status_code}: {response.text}")
+        if not response or response.status_code != 200:
+            raise Exception(f"Sarvam TTS Error after {max_retries} attempts: {response.text if response else 'No Response'}")
 
         # -------------------------
         # SAVE AUDIO
         # -------------------------
-        # Sarvam API returns a JSON with base64 encoded audio strings in the 'audios' field
         import base64
         result = response.json()
         if "audios" in result and len(result["audios"]) > 0:

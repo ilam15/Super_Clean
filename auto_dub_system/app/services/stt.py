@@ -16,33 +16,49 @@ def sarvam_translate(text: str, source_lang: str, target_lang: str) -> str:
     from app.config import settings
     
     logger = logging.getLogger(__name__)
-    url = "https://api.sarvam.ai/translate/v1"
+    url = "https://api.sarvam.ai/translate"  # Fixed URL
     headers = {
         "api-subscription-key": settings.SARVAM_API_KEY,
         "Content-Type": "application/json"
     }
+
+    # Map simple codes to Sarvam expectation (usually ISO + -IN for Indian langs)
+    indian_langs = ["en", "hi", "ta", "te", "kn", "ml", "pa", "gu", "mr", "bn", "or"]
+    s_lang = f"{source_lang}-IN" if source_lang in indian_langs else source_lang
+    t_lang = f"{target_lang}-IN" if target_lang in indian_langs else target_lang
     
-    # Fix #3: Use EXACT keys
+    # Fix: Use EXACT keys required by Sarvam API (source_language_code / target_language_code)
     data = {
         "input": text,
         "model": "mayura:v1",
-        "source_language": source_lang,
-        "target_language": target_lang
+        "source_language_code": s_lang,
+        "target_language_code": t_lang
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=data, timeout=30)
-        if response.status_code == 200:
-            res = response.json()
-            translated = res.get("translated_text", text)
-            logger.info(f"Translation successful: {source_lang} -> {target_lang}")
-            return translated
-        else:
-            logger.error(f"Sarvam translation failed ({response.status_code}): {response.text}")
-            return text
-    except Exception as e:
-        logger.error(f"Sarvam translation error: {e}")
-        return text
+    import time
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            if response.status_code == 200:
+                res = response.json()
+                translated = res.get("translated_text", text)
+                logger.info(f"Translation successful (Attempt {attempt+1}): {source_lang} -> {target_lang}")
+                return translated
+            else:
+                logger.error(f"Sarvam translation failed ({response.status_code}) Attempt {attempt+1}: {response.text}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                continue
+        except Exception as e:
+            logger.error(f"Sarvam translation error (Attempt {attempt+1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (attempt + 1))
+            else:
+                return text
+    return text
 
 def speech_to_text(
     chunk_path: str,
@@ -62,13 +78,14 @@ def speech_to_text(
     import logging
     import wave
     import audioop
+    import time
     from app.config import settings
 
     logger = logging.getLogger(__name__)
     duration = end_time - start_time
 
     # 1. Enforce Minimum Duration (Step 2)
-    if duration < 1.2:
+    if duration < 0.5:
         logger.warning(f"Chunk too short ({duration:.2f}s) for reliable STT. Skipping.")
         return {
             "text": "", "start_time": start_time, "end_time": end_time,
@@ -116,11 +133,34 @@ def speech_to_text(
         else:
             data["auto_detect"] = True
 
-        # 6. API Call with Timeout (Step 5)
-        response = requests.post(url, headers=headers, files=files, data=data, timeout=180)
+        # 6. API Call with Timeout and Retries
+        max_retries = 3
+        retry_delay = 5
+        response = None
         
-        if response.status_code != 200:
-            error_msg = f"Sarvam STT Error {response.status_code}: {response.text}"
+        for attempt in range(max_retries):
+            try:
+                # Re-open the file handle if it was closed or needs to be reset
+                with open(norm_path, "rb") as f:
+                    audio_bytes = f.read()
+                files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+                
+                response = requests.post(url, headers=headers, files=files, data=data, timeout=180)
+                if response.status_code == 200:
+                    break
+                else:
+                    logger.warning(f"Sarvam STT Attempt {attempt+1} failed with code {response.status_code}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay * (attempt + 1))
+            except Exception as conn_err:
+                logger.warning(f"Sarvam STT Attempt {attempt+1} connection error: {conn_err}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    raise conn_err
+        
+        if not response or response.status_code != 200:
+            error_msg = f"Sarvam STT Error after {max_retries} attempts: {response.status_code if response else 'No Response'}"
             logger.error(error_msg)
             raise Exception(error_msg)
 

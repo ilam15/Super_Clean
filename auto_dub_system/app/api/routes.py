@@ -75,7 +75,13 @@ async def upload_video(
     lang_map = {
         "English": "en", "Hindi": "hi", "Bengali": "bn", "Kannada": "kn",
         "Malayalam": "ml", "Marathi": "mr", "Odia": "or", "Punjabi": "pa",
-        "Tamil": "ta", "Telugu": "te", "Gujarati": "gu"
+        "Tamil": "ta", "Telugu": "te", "Gujarati": "gu", "Spanish": "es",
+        "French": "fr", "German": "de", "Mandarin": "zh", "Japanese": "ja",
+        "Korean": "ko", "Arabic": "ar", "Russian": "ru", "Portuguese": "pt",
+        "Italian": "it", "Dutch": "nl", "Polish": "pl", "Turkish": "tr",
+        "Thai": "th", "Vietnamese": "vi", "Hebrew": "he", "Swedish": "sv",
+        "Danish": "da", "Finnish": "fi", "Norwegian": "no", "Czech": "cs",
+        "Hungarian": "hu", "Greek": "el", "Romanian": "ro", "Bulgarian": "bg"
     }
     target_lang_code = lang_map.get(target_lang, "en")
     source_lang_code = lang_map.get(source_lang, "auto")
@@ -130,7 +136,13 @@ async def dub_video(
         lang_map = {
             "English": "en", "Hindi": "hi", "Bengali": "bn", "Kannada": "kn",
             "Malayalam": "ml", "Marathi": "mr", "Odia": "or", "Punjabi": "pa",
-            "Tamil": "ta", "Telugu": "te", "Gujarati": "gu"
+            "Tamil": "ta", "Telugu": "te", "Gujarati": "gu", "Spanish": "es",
+            "French": "fr", "German": "de", "Mandarin": "zh", "Japanese": "ja",
+            "Korean": "ko", "Arabic": "ar", "Russian": "ru", "Portuguese": "pt",
+            "Italian": "it", "Dutch": "nl", "Polish": "pl", "Turkish": "tr",
+            "Thai": "th", "Vietnamese": "vi", "Hebrew": "he", "Swedish": "sv",
+            "Danish": "da", "Finnish": "fi", "Norwegian": "no", "Czech": "cs",
+            "Hungarian": "hu", "Greek": "el", "Romanian": "ro", "Bulgarian": "bg"
         }
         target_lang_code = lang_map.get(target_lang, "en")
         source_lang_code = lang_map.get(source_lang, "auto")

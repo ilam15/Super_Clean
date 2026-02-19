@@ -393,58 +393,175 @@ class ChunkingManager:
     # =====================================================
     # LAYER 1: CHUNK SEPARATION
     # =====================================================
+    # =====================================================
+    # LAYER 1: TRANSLATION-OPTIMIZED CHUNK SEPARATION
+    # =====================================================
     @classmethod
-    def chunk_separation(cls, segment_path, start, end, speaker_no, overlap, segment_id=None, chunk_sec=5):
+    def chunk_separation(
+        cls,
+        segment_path,
+        start,
+        end,
+        speaker_no,
+        overlap,
+        segment_id=None,
+        asr_model=None,
+        device="cpu",
+        use_asr=True,
+        max_duration=25.0
+    ):
         """
-        Splits a segment into smaller fixed-size chunks (e.g., 5s)
-        Returns list of chunk metadata.
+        Translation-optimized chunking.
+
+        If ASR model provided:
+            - Runs full ASR on segment
+            - Splits using ASR sentence timestamps
+        Else:
+            - Falls back to silence-based splitting
         """
-        import soundfile as sf
-        
+
         if not os.path.exists(segment_path):
             raise FileNotFoundError(segment_path)
-            
-        chunks_metadata = []
-        
-        # Load audio (using librosa or soundfile)
-        # Using librosa for consistency or static ffmpeg
-        # Let's use ffmpeg based generator for efficiency or just pydub/librosa for simplicity
-        # implementation using existing audio_chunks generator
-        
-        # audio_chunks yields numpy arrays
+
         sr = 16000
-        gen = cls.audio_chunks(segment_path, sr=sr, chunk_sec=chunk_sec)
-        
+        # Use librosa for loading to get numpy array consistent with downstream
+        try:
+            y, sr = librosa.load(segment_path, sr=sr)
+        except Exception as e:
+            # Fallback to soundfile if librosa fails
+            y, sr = sf.read(segment_path)
+            if sr != 16000:
+                # Basic resampling if needed, though pipeline usually ensures 16k
+                pass 
+
+        chunks_metadata = []
         base_name = os.path.splitext(os.path.basename(segment_path))[0]
         output_dir = os.path.dirname(segment_path)
-        
-        current_time = start
-        
-        for i, audio_data in enumerate(gen):
-            chunk_dur = len(audio_data) / sr
-            chunk_filename = f"{base_name}_chunk_{i:04d}.wav"
-            chunk_path = os.path.join(output_dir, chunk_filename)
-            
-            # Save chunk
-            sf.write(chunk_path, audio_data, sr)
-            
-            chunks_metadata.append({
-                "chunk_path": chunk_path,
-                "start_time": round(current_time, 3),
-                "end_time": round(current_time + chunk_dur, 3),
-                "speaker_no": speaker_no,
-                "overlap": overlap,
-                "segment_id": segment_id
-            })
-            
-            current_time += chunk_dur
-            
+
+        # =================================================
+        # 🔥 ASR-BASED LINGUISTIC CHUNKING
+        # =================================================
+        if use_asr and asr_model is not None:
+
+            # Transcribe the segment to find sentence boundaries
+            # Note: This assumes asr_model is a faster-whisper WhisperModel instance
+            segments, info = asr_model.transcribe(
+                y,
+                word_timestamps=True,
+                vad_filter=True,
+                beam_size=5 if device == "cuda" else 2
+            )
+
+            for i, seg in enumerate(segments):
+
+                seg_start = seg.start
+                seg_end = seg.end
+                duration = seg_end - seg_start
+
+                if duration <= 0:
+                    continue
+
+                # Safety split for very long sentences
+                if duration > max_duration:
+                    split_points = np.linspace(
+                        seg_start,
+                        seg_end,
+                        int(duration // max_duration) + 2
+                    )
+
+                    for j in range(len(split_points) - 1):
+                        s = split_points[j]
+                        e = split_points[j + 1]
+
+                        chunk_audio = y[int(s * sr):int(e * sr)]
+
+                        chunk_filename = f"{base_name}_chunk_{i:04d}_{j:02d}.wav"
+                        chunk_path = os.path.join(output_dir, chunk_filename)
+
+                        sf.write(chunk_path, chunk_audio, sr)
+
+                        chunks_metadata.append({
+                            "chunk_path": chunk_path,
+                            "start_time": round(start + s, 3),
+                            "end_time": round(start + e, 3),
+                            "speaker_no": speaker_no,
+                            "overlap": overlap,
+                            "segment_id": segment_id
+                        })
+
+                else:
+                    chunk_audio = y[int(seg_start * sr):int(seg_end * sr)]
+
+                    chunk_filename = f"{base_name}_chunk_{i:04d}.wav"
+                    chunk_path = os.path.join(output_dir, chunk_filename)
+
+                    sf.write(chunk_path, chunk_audio, sr)
+
+                    chunks_metadata.append({
+                        "chunk_path": chunk_path,
+                        "start_time": round(start + seg_start, 3),
+                        "end_time": round(start + seg_end, 3),
+                        "speaker_no": speaker_no,
+                        "overlap": overlap,
+                        "segment_id": segment_id
+                    })
+
+        # =================================================
+        # ⚠️ SILENCE FALLBACK (IF NO ASR)
+        # =================================================
+        else:
+            # Fallback to silence-based logic if no model provided or ASR disabled
+            # Using pydub for silence splitting as in original logic
+            audio = AudioSegment.from_file(segment_path)
+
+            nonsilent_ranges = split_on_silence(
+                audio,
+                min_silence_len=400,
+                silence_thresh=-35,
+                keep_silence=200
+            )
+
+            # If silence splitting returns nothing (e.g. constant noise), just take the whole file
+            if not nonsilent_ranges:
+                nonsilent_ranges = [audio]
+
+            current_time = start
+
+            for i, chunk_audio in enumerate(nonsilent_ranges):
+
+                chunk_filename = f"{base_name}_chunk_{i:04d}.wav"
+                chunk_path = os.path.join(output_dir, chunk_filename)
+
+                chunk_audio.set_frame_rate(sr).set_channels(1).export(
+                    chunk_path,
+                    format="wav"
+                )
+
+                dur = len(chunk_audio) / 1000.0
+
+                chunks_metadata.append({
+                    "chunk_path": chunk_path,
+                    "start_time": round(current_time, 3),
+                    "end_time": round(current_time + dur, 3),
+                    "speaker_no": speaker_no,
+                    "overlap": overlap,
+                    "segment_id": segment_id
+                })
+
+                current_time += dur
+
         return chunks_metadata
 
 
 # Standalone wrapper to match import in stage1_tasks
-def chunk_separation(segment_path, start, end, speaker_no, overlap, segment_id=None):
-    return ChunkingManager.chunk_separation(segment_path, start, end, speaker_no, overlap, segment_id)
+def chunk_separation(
+    segment_path, start, end, speaker_no, overlap, segment_id=None,
+    asr_model=None, device="cpu", use_asr=True, max_duration=25.0
+):
+    return ChunkingManager.chunk_separation(
+        segment_path, start, end, speaker_no, overlap, segment_id,
+        asr_model, device, use_asr, max_duration
+    )
 
 # auto init
 ChunkingManager.initialize()

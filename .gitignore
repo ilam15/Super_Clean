@@ -2,7 +2,7 @@
 /venv
 .env
 __pycache__
-auto_dub_system/data/lid/*.bin
+# auto_dub_system/data/lid/*.bin
 
 *.wav
 *.mp3

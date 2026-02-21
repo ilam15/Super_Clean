@@ -66,20 +66,14 @@ def text_to_speech(
         # -------------------------
         # VOICE/SPEAKER SELECTION (bulbul:v3)
         # -------------------------
+        from app.config import get_assigned_voice
+        
         logger.info(f"TTS Config: gender={gender}, lang={target_lang_code}")
         
-        # bulbul:v3 Speakers
-        # Male: Shubh (default), Aditya, Rahul, Amit, Dev, Varun, Sumit, Kabir, Aayan, Ashutosh, Advait, Anand, Tarun, Sunny, Mani, Gokul, Vijay, Mohit, Rehan, Soham
-        # Female: Ritu, Priya, Neha, Pooja, Simran, Kavya, Ishita, Shreya, Roopa, Amelia, Sophia, Tanya, Shruti, Suhani, Kavitha, Rupali
-        
-        if gender.lower() == "female":
-            speaker = "priya" 
-        elif gender.lower() == "male":
-            speaker = "shubh"
-        else:
-            speaker = "shubh"   # Default
+        # Call the deterministic dynamic assignment utility
+        speaker = get_assigned_voice(speaker_no, gender)
             
-        logger.info(f"Using speaker: {speaker}")
+        logger.info(f"🎤 Assigned voice '{speaker}' to {speaker_no} ({gender})")
 
         # -------------------------
         # FILE PATH

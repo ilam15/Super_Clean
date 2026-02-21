@@ -31,37 +31,30 @@ def translation_matcher(
         # BASIC CLEAN
         # -------------------------
         text = text.strip()
-        words = text.split()
-
+        
         # -------------------------
-        # DURATION CALC
+        # EMPTY TEXT HANDLING
         # -------------------------
-        duration = max(end_time - start_time, 0.1)
-
-        # average speaking speed ≈ 2.5 words/sec
-        max_words = int(duration * 3)
-
-        # -------------------------
-        # OVERFLOW CORRECTION
-        # -------------------------
-        if len(words) > max_words:
-            words = words[:max_words]
-
-        aligned_text = " ".join(words)
-
-        # -------------------------
-        # UNDERFLOW CORRECTION
-        # -------------------------
-        if len(words) < 1:
-            aligned_text = "..."
+        # If the translation is empty or just whitespace, pass it through as empty
+        # instead of generating "...". The TTS engine will see empty text and generate silence.
+        if not text:
+            aligned_text = ""
+        else:
+            # We no longer aggressively truncate words here based on a flawed heuristic.
+            # If the text is too long for the duration, the TTS engine (or a later processing step)
+            # should handle dynamic speedup (e.g., using pyrubberband or ffmpeg atempo)
+            # rather than deleting the translated content and destroying the sentence meaning.
+            aligned_text = text
 
         # -------------------------
         # FINAL STRUCTURE
         # -------------------------
+        # Preserve precision! Rounding to 3 decimal places (milliseconds) instead of 2.
+        # This prevents tiny gaps/overlaps from accumulating and drifting over a long video.
         return {
             "aligned_text": aligned_text,
-            "start_time": round(start_time, 2),
-            "end_time": round(end_time, 2),
+            "start_time": round(start_time, 3),
+            "end_time": round(end_time, 3),
             "speaker_no": speaker_no,
             "overlap": overlap,
             "gender": gender

@@ -235,13 +235,28 @@ def speech_to_text(
         - Target Lag: {target_lang}
         """)
 
+        # --- CONTEXT AWARENESS (Simple) ---
+        # If text is too short or garbage, ignore it to prevent hallucinations/artifacts
+        if len(final_text) < 3:
+            logger.info("Text is too short/garbage. Treating as silence.")
+            final_text = ""
+            det_lang = source_lang if source_lang != "auto" else "en"
+            
+        # --- CONFIDENCE GATING ---
+        # If the model is confused (low confidence), force it to the expected source language
+        # or fallback to English to prevent translating bizarre hallucinations ('kn' instead of 'en')
+        expected_lang = source_lang if source_lang != "auto" else "en"
+        if conf < 0.85 and det_lang != expected_lang:
+            logger.warning(f"Low confidence ({conf}) for {det_lang}. Forcing to {expected_lang}.")
+            det_lang = expected_lang
+
         # Translation Logic
         translated_text = final_text
-        if det_lang != target_lang:
+        if final_text and det_lang != target_lang:
              logger.info(f"Translating {det_lang} -> {target_lang}")
              # Use the simple translation helper
              translated_text = sarvam_translate(final_text, det_lang, target_lang)
-        else:
+        elif final_text:
              logger.info("Source matches target. Skipping translation.")
 
         total_elapsed = time.time() - start_process_time

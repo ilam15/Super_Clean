@@ -26,3 +26,42 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+# ---------------------------------------------------------
+# Bulbul:v3 Voice Roster (Sarvam AI TTS)
+# ---------------------------------------------------------
+BULBUL_MALE_VOICES = [
+    "shubh", "aditya", "rahul", "amit", "dev", "varun", "sumit", 
+    "kabir", "aayan", "ashutosh", "advait", "anand", "tarun", "sunny", 
+    "mani", "gokul", "vijay", "mohit", "rehan", "soham"
+]
+
+BULBUL_FEMALE_VOICES = [
+    "priya", "ritu", "neha", "pooja", "simran", "kavya", "ishita", 
+    "shreya", "roopa", "amelia", "sophia", "tanya", "shruti", "suhani", 
+    "kavitha", "rupali"
+]
+
+def get_assigned_voice(speaker_id: str, gender: str) -> str:
+    """
+    Deterministically assigns a voice from the Bulbul roster 
+    based on the speaker ID (e.g., 'SPEAKER_00') and gender.
+    """
+    import hashlib
+    
+    # Extract just the number from "SPEAKER_00", "SPEAKER_01" if possible,
+    # otherwise hash the whole ID to ensure a consistent index lookup.
+    try:
+        if separator_idx := speaker_id.rfind("_") + 1:
+            idx_seed = int(speaker_id[separator_idx:])
+        else:
+            idx_seed = int(hashlib.md5(speaker_id.encode()).hexdigest(), 16)
+    except Exception:
+        idx_seed = int(hashlib.md5(speaker_id.encode()).hexdigest(), 16)
+
+    is_female = gender.lower() == "female"
+    voice_list = BULBUL_FEMALE_VOICES if is_female else BULBUL_MALE_VOICES
+    
+    # Use modulo to pick a consistent voice from the list
+    voice_idx = idx_seed % len(voice_list)
+    return voice_list[voice_idx]

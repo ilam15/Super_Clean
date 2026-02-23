@@ -103,7 +103,8 @@ def process_stage2(self, stage1_result):
         logger.warning("No chunks found in stage1_result. Skipping to stage3/4 with empty data.")
         # Replaces the current task with a chain of stage3 -> stage4 with empty results
         from app.tasks.stage4_tasks import process_stage4
-        workflow = (process_stage3.s([], video_path) | process_stage4.s())
+        background_path = stage1_result.get("separated_audio", {}).get("background")
+        workflow = (process_stage3.s([], video_path, background_path) | process_stage4.s())
         return self.replace(workflow)
 
     # --- Speaker-level Gender Majority Vote (Production Optimization) ---
@@ -162,7 +163,8 @@ def process_stage2(self, stage1_result):
     
     # Create a chord: execute chunk_chains in parallel (group), then call process_stage3 -> process_stage4
     from app.tasks.stage4_tasks import process_stage4
-    callback = (process_stage3.s(video_path) | process_stage4.s())
+    background_path = stage1_result.get("separated_audio", {}).get("background")
+    callback = (process_stage3.s(video_path, background_path) | process_stage4.s())
     workflow = chord(chunk_chains, body=callback)
     
     # CRITICAL: Use self.replace to expand the current task into the chord workflow

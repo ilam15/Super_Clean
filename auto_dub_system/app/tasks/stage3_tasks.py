@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 @celery_app.task
-def process_stage3(stage2_results, video_path):
+def process_stage3(stage2_results, video_path, background_path=None):
     """
     Assembles the final audio track using Absolute Positioning with pydub.
     This fixes the 'Non-monotonic DTS' errors and sync drift.
@@ -18,8 +18,19 @@ def process_stage3(stage2_results, video_path):
         original_audio = AudioSegment.from_file(video_path)
         video_duration_ms = len(original_audio)
         
-        # 2. Create a silent 'canvas' exactly the length of the video
-        final_mix = AudioSegment.silent(duration=video_duration_ms)
+        # 2. Create the 'canvas' exactly the length of the video
+        if background_path and os.path.exists(background_path):
+            logger.info(f"Using background noise track: {background_path}")
+            final_mix = AudioSegment.from_file(background_path)
+            # Ensure it matches the video duration exactly
+            if len(final_mix) < video_duration_ms:
+                final_mix += AudioSegment.silent(duration=video_duration_ms - len(final_mix))
+            final_mix = final_mix[:video_duration_ms]
+            # Lower background audio slightly to make TTS clearer
+            final_mix = final_mix - 3
+        else:
+            logger.info("No background track found, using silent canvas.")
+            final_mix = AudioSegment.silent(duration=video_duration_ms)
 
         # 3. Layer each TTS chunk onto the canvas
         # Filter overlapping segments, skipping the shorter one

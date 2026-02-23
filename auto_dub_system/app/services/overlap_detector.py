@@ -27,13 +27,7 @@ def overlapping_audio_split(timestamps: List[Tuple[float, float]],
                            overlap: bool,
                            output_dir: Optional[str] = None,
                            method: str = "demucs") -> List[str]:
-    """
-    Conditionally split overlapping audio. Only runs if overlap == True.
-    Returns: separated_audio_paths or [] if no overlap
-    """
-    if not overlap:
-        logger.info("⏭️  No overlap - skipping")
-        return []
+    logger.info("⚠️  Separating vocals and background noise")
     
     logger.info(f"⚠️  Separating {speaker_count} speakers")
     
@@ -72,15 +66,16 @@ def _demucs(audio: Path, out_dir: Path) -> List[str]:
         # Demucs output structure: <out_dir>/<model_name>/<audio_stem_name>/vocals.wav
         # Note: if audio file is "my_song.mp3", stem name is "my_song"
         vocals = out_dir / "htdemucs" / audio.stem / "vocals.wav"
+        no_vocals = out_dir / "htdemucs" / audio.stem / "no_vocals.wav"
         
-        if not vocals.exists():
+        if not vocals.exists() or not no_vocals.exists():
             # Sometimes demucs might output differently depending on version/args
             # Let's log what we have if it fails
-            logger.error(f"Demucs output not found at {vocals}. Contents of {out_dir}: {list(out_dir.glob('**/*'))}")
+            logger.error(f"Demucs output not found. Contents of {out_dir}: {list(out_dir.glob('**/*'))}")
             raise AudioSplitError("No output created")
         
-        result = [str(vocals)]
-        logger.info(f"✓ Demucs: {len(result)} files")
+        result = {"vocals": str(vocals), "background": str(no_vocals)}
+        logger.info(f"✓ Demucs separation complete")
         return result
         
     except FileNotFoundError:
@@ -93,16 +88,18 @@ def _demucs(audio: Path, out_dir: Path) -> List[str]:
 def _spleeter(audio: Path, out_dir: Path, speakers: int) -> List[str]:
     """Spleeter separation"""
     try:
-        stems = min(max(speakers, 2), 5)
-        cmd = ["spleeter", "separate", "-p", f"spleeter:{stems}stems",
+        cmd = ["spleeter", "separate", "-p", "spleeter:2stems",
                "-o", str(out_dir), str(audio)]
         subprocess.run(cmd, check=True, capture_output=True, text=True)
         
-        result = sorted([str(f) for f in (out_dir / audio.stem).glob("*.wav")])
-        if not result:
-            raise AudioSplitError("No output created")
+        vocals = out_dir / audio.stem / "vocals.wav"
+        accompaniment = out_dir / audio.stem / "accompaniment.wav"
         
-        logger.info(f"✓ Spleeter: {len(result)} files")
+        if not vocals.exists() or not accompaniment.exists():
+            raise AudioSplitError("No output created by Spleeter")
+        
+        result = {"vocals": str(vocals), "background": str(accompaniment)}
+        logger.info(f"✓ Spleeter separation complete")
         return result
         
     except FileNotFoundError:

@@ -35,17 +35,16 @@ def task_diarization(audio_path):
     return res
 
 
-# ---------- TASK 3 (Conditional) ----------
+# ---------- TASK 3 (Audio Separation) ----------
 @celery_app.task
 def task_overlap_split(diarization_data):
-    if diarization_data.get("overlap"):
-        # Service expects: (timestamps, speaker_count, audio_path, overlap, ...)
-        diarization_data["separated_audio"] = overlapping_audio_split(
-            diarization_data["timestamps"],
-            diarization_data["speaker_count"],
-            diarization_data["audio_path"],
-            diarization_data["overlap"]
-        )
+    # Unconditionally separate vocals and background
+    diarization_data["separated_audio"] = overlapping_audio_split(
+        diarization_data["timestamps"],
+        diarization_data["speaker_count"],
+        diarization_data["audio_path"],
+        True # Run separation unconditionally
+    )
     return diarization_data
 
 
@@ -54,9 +53,9 @@ def task_overlap_split(diarization_data):
 def task_segment(diarization_data):
     # If we have separated audio from overlap split, use that. Otherwise use original.
     audio_to_segment = diarization_data["audio_path"]
-    if diarization_data.get("separated_audio") and len(diarization_data["separated_audio"]) > 0:
-        # For simplicity, we use the first separated track (vocals) for segmentation
-        audio_to_segment = diarization_data["separated_audio"][0]
+    if diarization_data.get("separated_audio"):
+        # separated_audio is now a dict {"vocals": ..., "background": ...}
+        audio_to_segment = diarization_data["separated_audio"]["vocals"]
 
     overlap_flags = [s["overlap"] for s in diarization_data["segments"]]
     

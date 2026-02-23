@@ -79,6 +79,8 @@ def task_tts(align_result):
         align_result["overlap"],
         align_result["gender"]
     )
+    # Pass the actual spoken text forward to the frontend
+    res["text"] = align_result.get("aligned_text", "")
     logger.info(f"TTS completed: {res.get('audio_path')}")
     return res
 

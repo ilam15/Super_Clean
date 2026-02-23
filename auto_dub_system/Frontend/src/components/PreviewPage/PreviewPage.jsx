@@ -189,6 +189,31 @@ const PreviewPage = () => {
                             </div>
                         </div>
 
+                        {/* Transcript Display */}
+                        {metadata.transcript && metadata.transcript.length > 0 && (
+                            <div className="bg-white rounded-3xl p-6 shadow-xl shadow-gray-100/50 border border-gray-100 mt-4 transition-all duration-500 hover:shadow-2xl hover:shadow-purple-100/50">
+                                <h3 className="font-bold text-gray-900 text-lg mb-4 flex items-center gap-2">
+                                    <span className="text-purple-600 text-xl">📝</span> Generated Transcript
+                                </h3>
+                                <div className="max-h-64 overflow-y-auto pr-3 space-y-3 custom-scrollbar">
+                                    {metadata.transcript.map((item, idx) => (
+                                        <div key={idx} className="p-4 rounded-2xl bg-gray-50/80 border border-gray-100 transition-colors duration-300 hover:border-purple-200 hover:bg-purple-50/50 group">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-xs font-bold text-purple-700 bg-purple-100/80 px-2.5 py-0.5 rounded-full tracking-wide">
+                                                    {item.speaker_no?.replace('SPEAKER_', 'Speaker ') || 'Speaker'}
+                                                </span>
+                                                <span className="text-xs font-semibold text-gray-400 font-mono tracking-tight group-hover:text-purple-400 transition-colors">
+                                                    {item.start_time?.toFixed(1)}s - {item.end_time?.toFixed(1)}s
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-gray-700 leading-relaxed font-medium">
+                                                {item.text || <span className="text-gray-400 italic">No speech detected</span>}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                     </div>
 

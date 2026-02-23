@@ -87,7 +87,8 @@ def process_stage3(stage2_results, video_path, background_path=None):
         return {
             "status": "stage3_complete",
             "final_audio_path": output_audio_path,
-            "video_path": video_path
+            "video_path": video_path,
+            "transcript": [{"start_time": s.get("start_time"), "end_time": s.get("end_time"), "speaker_no": s.get("speaker_no"), "text": s.get("text", "")} for s in valid_segments]
         }
     except Exception as e:
         logger.error(f"Stage 3 failed: {e}")

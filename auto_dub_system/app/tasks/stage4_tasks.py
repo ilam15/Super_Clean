@@ -36,7 +36,8 @@ def process_stage4(stage3_result):
         return {
             "status": "stage4_complete",
             "final_video_path": final_video_name, # Return filename for the API to use in download URL
-            "job_id": job_id
+            "job_id": job_id,
+            "transcript": stage3_result.get("transcript", [])
         }
 
     except Exception as e:

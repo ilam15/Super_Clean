@@ -427,6 +427,7 @@ const InputPage = () => {
                                         dubbedLanguage: getLangName(targetLanguage),
                                         duration: uploadedVideo?.duration || 'Unknown',
                                         status: 'Synced Successfully',
+                                        transcript: result.transcript || []
                                     },
                                 },
                             });

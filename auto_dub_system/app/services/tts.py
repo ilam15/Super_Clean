@@ -1,3 +1,135 @@
+def adjust_tts_speed_for_lipsync(
+    audio_path: str,
+    start_time: float,
+    end_time: float,
+    logger=None,
+    silence_db: int = 30,
+    natural_min: float = 0.5,
+    natural_max: float = 2.0,
+    tolerance: float = 0.03
+) -> str:
+    """
+    Adjust TTS audio speed to match original segment duration
+    using perceptually safe time-stretching.
+
+    Parameters:
+        audio_path: Path to generated TTS WAV file
+        start_time: Segment start timestamp (seconds)
+        end_time: Segment end timestamp (seconds)
+        logger: Optional logger
+        silence_db: Silence trim threshold (dB)
+        natural_min: Minimum natural speed factor
+        natural_max: Maximum natural speed factor
+        tolerance: Speed difference threshold before re-encoding
+
+    Returns:
+        Path to speed-adjusted audio file (or original if no change)
+    """
+    try:
+        import librosa
+        import subprocess
+        import shutil
+        import os
+        from pathlib import Path
+
+        # -----------------------------
+        # Validate segment duration
+        # -----------------------------
+        orig_dur = end_time - start_time
+        if orig_dur <= 0:
+            raise ValueError(f"Invalid segment duration: {orig_dur}")
+
+        # -----------------------------
+        # Ensure FFmpeg exists
+        # -----------------------------
+        ffmpeg_cmd = shutil.which("ffmpeg")
+        if not ffmpeg_cmd:
+            raise RuntimeError("FFmpeg not found in PATH")
+
+        # -----------------------------
+        # Load & Trim Silence (Accurate Speech Duration)
+        # -----------------------------
+        y, sr = librosa.load(audio_path, sr=None)
+        yt, _ = librosa.effects.trim(y, top_db=silence_db)
+
+        if len(yt) == 0:
+            if logger:
+                logger.warning("Audio contains only silence. Skipping speed adjustment.")
+            return audio_path
+
+        tts_dur = len(yt) / sr
+        
+        # Save trimmed pure speech to a temporary file
+        import soundfile as sf
+        p = Path(audio_path)
+        trimmed_path = str(p.with_name(p.stem + "_trimmed.wav"))
+        sf.write(trimmed_path, yt, sr)
+
+        # -----------------------------
+        # Compute Required Speed Factor
+        # -----------------------------
+        speed = tts_dur / orig_dur
+
+        # -----------------------------
+        # Natural Speech Constraint
+        # -----------------------------
+        if speed < natural_min or speed > natural_max:
+            if logger:
+                logger.warning(
+                    f"Speed {speed:.3f} outside natural range "
+                    f"({natural_min}-{natural_max}). Clamping."
+                )
+            speed = max(natural_min, min(speed, natural_max))
+
+        # -----------------------------
+        # Skip if Within Perceptual Tolerance
+        # -----------------------------
+        out_path = str(p.with_name(p.stem + "_synced.wav"))
+        
+        if abs(speed - 1.0) <= tolerance:
+            if logger:
+                logger.info("Speed within tolerance. No adjustment needed.")
+            shutil.move(trimmed_path, out_path)
+            return out_path
+
+        # -----------------------------
+        # Apply FFmpeg atempo Filter
+        # -----------------------------
+        filter_str = f"atempo={speed:.6f}"
+
+        cmd = [
+            ffmpeg_cmd,
+            "-y",
+            "-i", trimmed_path,
+            "-filter:a", filter_str,
+            out_path
+        ]
+
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Clean up temporary trimmed file
+        try:
+            os.remove(trimmed_path)
+            os.remove(audio_path) # Optional: remove untrimmed to save space
+        except OSError:
+            pass
+
+        if logger:
+            logger.info(f"Speed adjusted: {speed:.4f} -> {out_path}")
+
+        return out_path
+
+    except Exception as e:
+        if logger:
+            logger.warning(f"Speed adjustment failed. Using original audio. Error: {e}")
+        return audio_path
+
+
 def text_to_speech(
     aligned_text: str,
     start_time: float,
@@ -38,8 +170,8 @@ def text_to_speech(
         if not clean_text:
             return {
                 "audio_path": None,
-                "start_time": round(start_time, 2),
-                "end_time": round(end_time, 2),
+                "start_time": start_time,
+                "end_time": end_time,
                 "speaker_no": speaker_no,
                 "overlap": overlap
             }
@@ -144,75 +276,31 @@ def text_to_speech(
         # -------------------------
         # SPEED ADJUSTMENT (LIPSYNC)
         # -------------------------
-        try:
-            from pathlib import Path
-            import soundfile as sf
-            import subprocess
-            import shutil
-
-            ffmpeg_cmd = shutil.which("ffmpeg")
-            if not ffmpeg_cmd:
-                raise RuntimeError("FFmpeg not found in PATH")
-
-            orig_dur = max(end_time - start_time, 0.1)
-
-            info = sf.info(audio_path)
-            if info.samplerate == 0:
-                # Fallback if Sf fails to read headers, though unlikely for valid wav
-                tts_dur = orig_dur 
-            else:
-                 tts_dur = info.frames / info.samplerate
-
-            speed = tts_dur / orig_dur
-            # Constrain speed to avoid extreme artifacts
-            speed = max(0.5, min(speed, 2.0)) 
-
-            filters = []
-            temp_speed = speed
-            
-            # atempo filter supports 0.5 to 2.0
-            # Since we constrained speed to 0.5-2.0, one pass is enough usually.
-            # But logic below handles chaining if we widen range later.
-            while temp_speed > 2.0:
-                filters.append("atempo=2.0")
-                temp_speed /= 2.0
-            while temp_speed < 0.5:
-                filters.append("atempo=0.5")
-                temp_speed /= 0.5
-            
-            if abs(temp_speed - 1.0) > 0.01:
-                filters.append(f"atempo={temp_speed:.3f}")
-
-            if filters:
-                p = Path(audio_path)
-                out_path = str(p.with_name(p.stem + "_synced.wav"))
-                filter_str = ",".join(filters)
-
-                cmd = [
-                    ffmpeg_cmd, "-y", "-i", audio_path,
-                    "-filter:a", filter_str,
-                    out_path
-                ]
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                audio_path = out_path
-                
-        except Exception as speed_err:
-            logger.warning(f"Speed adjustment failed, using original TTS: {speed_err}")
+        audio_path = adjust_tts_speed_for_lipsync(
+            audio_path=audio_path,
+            start_time=start_time,
+            end_time=end_time,
+            logger=logger
+        )
 
         # -------------------------
         # OUTPUT STRUCTURE
         # -------------------------
         return {
             "audio_path": audio_path,
-            "start_time": round(start_time, 2),
-            "end_time": round(end_time, 2),
+            "start_time": start_time,
+            "end_time": end_time,
             "speaker_no": speaker_no,
             "overlap": overlap,
             "gender": gender
         }
 
     except Exception as e:
-        logger.error(f"Sarvam TTS Critical Error: {e}")
+        # Avoid logger error if hasn't been instantiated
+        try:
+            logger.error(f"Sarvam TTS Critical Error: {e}")
+        except:
+            print(f"Sarvam TTS Critical Error: {e}")
         return {
             "audio_path": None,
             "start_time": start_time,

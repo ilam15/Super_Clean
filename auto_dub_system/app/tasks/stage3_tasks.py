@@ -22,16 +22,36 @@ def process_stage3(stage2_results, video_path):
         final_mix = AudioSegment.silent(duration=video_duration_ms)
 
         # 3. Layer each TTS chunk onto the canvas
-        # stage2_results is a list of results from stage2 (TTS outputs)
-        sorted_segments = sorted(stage2_results, key=lambda x: x['start_time'])
+        # Filter overlapping segments, skipping the shorter one
+        valid_segments = [s for s in stage2_results if s.get('audio_path') and os.path.exists(s.get('audio_path'))]
         
-        for segment in sorted_segments:
+        while True:
+            overlap_found = False
+            valid_segments.sort(key=lambda x: x.get('start_time', 0))
+            
+            for i in range(len(valid_segments) - 1):
+                s1 = valid_segments[i].get('start_time', 0)
+                e1 = valid_segments[i].get('end_time', s1)
+                
+                s2 = valid_segments[i+1].get('start_time', 0)
+                e2 = valid_segments[i+1].get('end_time', s2)
+                
+                if s2 < e1:
+                    dur1 = e1 - s1
+                    dur2 = e2 - s2
+                    if dur1 >= dur2:
+                        valid_segments.pop(i + 1)
+                    else:
+                        valid_segments.pop(i)
+                    overlap_found = True
+                    break
+                    
+            if not overlap_found:
+                break
+                
+        for segment in valid_segments:
             audio_path = segment.get('audio_path')
             start_time_sec = segment.get('start_time')
-            
-            # Skip if STT/TTS failed for this chunk (it will just remain silent)
-            if not audio_path or not os.path.exists(audio_path):
-                continue
 
             try:
                 # Load the TTS clip

@@ -188,99 +188,43 @@ async def youtube_info(data: YouTubeURL):
     if not data.url or not data.url.strip():
         raise HTTPException(status_code=400, detail="URL cannot be empty")
 
-    # Check if yt-dlp is available
-    if not shutil.which("yt-dlp"):
-        raise HTTPException(
-            status_code=500,
-            detail="yt-dlp is not installed. Run: pip install yt-dlp"
-        )
-
     try:
-        cmd = ["yt-dlp", "-j", "--no-playlist", data.url]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"yt-dlp error: {result.stderr.strip() or 'Unknown error'}"
-            )
-        info = json.loads(result.stdout)
-
-        formats = [
-            {"quality": "1080p", "available": True},
-            {"quality": "720p", "available": True},
-            {"quality": "480p", "available": True},
-            {"quality": "360p", "available": True},
-        ]
-
+        from app.services.yt_downloader import YouTubeDownloader
+        downloader = YouTubeDownloader()
+        info = downloader.get_video_info(data.url)
+        
         return {
             "status": "success",
-            "data": {
-                "title": info.get("title", "Unknown Title"),
-                "thumbnail": info.get("thumbnail", ""),
-                "duration": info.get("duration", 0),
-                "uploader": info.get("uploader", "Unknown"),
-                "formats": formats,
-            },
+            "data": info,
         }
-    except HTTPException:
-        raise
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Request timed out fetching video info")
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Failed to parse video info response")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch YouTube info: {str(e)}")
 
 
 @router.post("/youtube/download")
 async def youtube_download(data: YouTubeDownload):
-    if not shutil.which("yt-dlp"):
-        raise HTTPException(
-            status_code=500,
-            detail="yt-dlp is not installed. Run: pip install yt-dlp"
-        )
     try:
-        os.makedirs("data/uploads", exist_ok=True)
-        output_tmpl = "data/uploads/%(title)s_%(id)s.%(ext)s"
-
-        cmd = [
-            "yt-dlp",
-            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "-o", output_tmpl,
-            data.url,
-        ]
-
-        # Get filename first
-        result = subprocess.run(
-            cmd + ["--get-filename"], capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            raise HTTPException(status_code=400, detail=f"yt-dlp error: {result.stderr.strip()}")
-        filename_abs = result.stdout.strip()
-
-        # Run actual download
-        dl_result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if dl_result.returncode != 0:
-            raise HTTPException(status_code=400, detail=f"Download failed: {dl_result.stderr.strip()}")
-
-        if not os.path.exists(filename_abs):
+        from app.services.yt_downloader import YouTubeDownloader
+        # Determine the filename structure from URL/datetime to avoid conflicts
+        import uuid
+        filename = f"yt_{uuid.uuid4().hex[:8]}.mp4"
+        
+        downloader = YouTubeDownloader(download_dir="data/uploads")
+        file_path = downloader.download_video(url=data.url, quality=data.quality, filename=filename)
+        
+        if not os.path.exists(file_path):
             raise HTTPException(status_code=500, detail="Download completed but file not found")
 
-        filename = os.path.basename(filename_abs)
-        size_bytes = os.path.getsize(filename_abs)
+        filename = os.path.basename(file_path)
+        size_bytes = os.path.getsize(file_path)
         size_mb = f"{(size_bytes / (1024 * 1024)):.2f} MB"
 
         return {
             "status": "success",
-            "file_path": filename_abs,
+            "file_path": file_path,
             "filename": filename,
             "size": size_mb,
         }
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"YouTube download failed: {str(e)}")
 

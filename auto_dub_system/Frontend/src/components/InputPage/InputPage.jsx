@@ -25,9 +25,16 @@ const InputPage = () => {
     const [downloadProgress, setDownloadProgress] = useState(0);
 
     // New Options State
-
     const [recoverBackgroundNoise, setRecoverBackgroundNoise] = useState(false);
     const [makeVideo, setMakeVideo] = useState(false);
+
+    // Transcript Input State
+    const [transcriptMode, setTranscriptMode] = useState('auto'); // 'auto' | 'custom'
+    const [rawTranscript, setRawTranscript] = useState('');
+    const [structuredSegments, setStructuredSegments] = useState([
+        { speaker: 'Speaker 1', start: '', end: '', text: '' }
+    ]);
+    const [transcriptInputTab, setTranscriptInputTab] = useState('plain'); // 'plain' | 'structured'
 
     // Validation Errors
     const [errors, setErrors] = useState({});
@@ -355,6 +362,20 @@ const InputPage = () => {
             formData.append('target_lang', getLangName(targetLanguage));
             formData.append('gender', speakerGender || 'Male');
             formData.append('recover_bg', recoverBackgroundNoise ? 'true' : 'false');
+
+            // Attach custom transcript if provided
+            if (transcriptMode === 'custom') {
+                if (transcriptInputTab === 'plain' && rawTranscript.trim()) {
+                    formData.append('custom_transcript', rawTranscript.trim());
+                    formData.append('transcript_type', 'plain');
+                } else if (transcriptInputTab === 'structured') {
+                    const validSegments = structuredSegments.filter(s => s.text.trim());
+                    if (validSegments.length > 0) {
+                        formData.append('custom_transcript', JSON.stringify(validSegments));
+                        formData.append('transcript_type', 'structured');
+                    }
+                }
+            }
 
             // Determine endpoint and attach file
             let endpoint = '/upload';
@@ -819,49 +840,186 @@ const InputPage = () => {
                     </div>
                 </div>
 
-                {/* Column 3: Speaker */}
+                {/* Column 3: Transcript Input */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col h-full hover:shadow-md transition-shadow duration-300">
-                    <div className="flex items-center gap-3 mb-6">
-                        <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center text-rose-600">
+
+                    {/* Header */}
+                    <div className="flex items-center gap-3 mb-5">
+                        <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center text-violet-600">
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                         </div>
-                        <h2 className="text-base font-extrabold text-slate-800 uppercase tracking-wide">Voice Model</h2>
+                        <h2 className="text-base font-extrabold text-slate-800 uppercase tracking-wide">Transcript</h2>
                     </div>
 
-                    {/* Speaker Gender Selector */}
-                    <div className="flex-1">
-                        <label className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-3 block">Voice Gender</label>
-                        <div className="grid grid-cols-1 gap-3">
-                            {speakerOptions.map((option) => (
-                                <div
-                                    key={option.id}
-                                    onClick={() => setSpeakerGender(option.name)}
-                                    className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 flex items-center gap-4 ${speakerGender === option.name
-                                        ? `border-transparent ring-2 ring-offset-2 ring-slate-900 bg-slate-900 text-white shadow-lg`
-                                        : 'border-slate-100 bg-white hover:border-slate-300'}`}
-                                >
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xl bg-white/20`}>
-                                        {option.icon}
-                                    </div>
-                                    <div className="flex-1">
-                                        <div className={`text-sm font-bold ${speakerGender === option.name ? 'text-white' : 'text-slate-800'}`}>{option.name}</div>
-                                        <div className={`text-[10px] uppercase tracking-wider font-medium ${speakerGender === option.name ? 'text-slate-300' : 'text-slate-400'}`}>Professional</div>
-                                    </div>
-                                    {speakerGender === option.name && (
-                                        <div className="w-5 h-5 bg-white text-slate-900 rounded-full flex items-center justify-center">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                            </svg>
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                    {/* Auto / Custom Toggle */}
+                    <div className="flex gap-2 mb-5 p-1 bg-slate-100 rounded-xl">
+                        <button
+                            onClick={() => setTranscriptMode('auto')}
+                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${transcriptMode === 'auto'
+                                ? 'bg-white text-slate-900 shadow-sm'
+                                : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                        >
+                            🤖 Auto-Detect
+                        </button>
+                        <button
+                            onClick={() => setTranscriptMode('custom')}
+                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${transcriptMode === 'custom'
+                                ? 'bg-white text-slate-900 shadow-sm'
+                                : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                        >
+                            ✍️ Custom
+                        </button>
+                    </div>
+
+                    {/* Auto Mode Info */}
+                    {transcriptMode === 'auto' && (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-6 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50 animate-fade-in">
+                            <div className="w-14 h-14 rounded-2xl bg-violet-50 flex items-center justify-center mb-4">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                </svg>
+                            </div>
+                            <p className="text-sm font-bold text-slate-700 mb-1">Auto Speech Recognition</p>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                                The system will automatically transcribe the audio using Whisper AI. Switch to <span className="font-bold text-violet-600">Custom</span> to provide your own transcript.
+                            </p>
                         </div>
+                    )}
 
+                    {/* Custom Transcript Mode */}
+                    {transcriptMode === 'custom' && (
+                        <div className="flex-1 flex flex-col gap-3 animate-fade-in">
 
-                    </div>
+                            {/* Sub-tabs: Plain vs Structured */}
+                            <div className="flex gap-1 border-b border-slate-100 pb-2">
+                                <button
+                                    onClick={() => setTranscriptInputTab('plain')}
+                                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${transcriptInputTab === 'plain'
+                                        ? 'bg-violet-100 text-violet-700'
+                                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                >
+                                    Plain Text
+                                </button>
+                                <button
+                                    onClick={() => setTranscriptInputTab('structured')}
+                                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${transcriptInputTab === 'structured'
+                                        ? 'bg-violet-100 text-violet-700'
+                                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                >
+                                    Timed Segments
+                                </button>
+                            </div>
+
+                            {/* Plain Text Input */}
+                            {transcriptInputTab === 'plain' && (
+                                <div className="flex flex-col gap-2 flex-1">
+                                    <p className="text-xs text-slate-400">Paste or type the full transcript text below.</p>
+                                    <textarea
+                                        value={rawTranscript}
+                                        onChange={e => setRawTranscript(e.target.value)}
+                                        placeholder="Hello, welcome to our video. Today we will discuss..."
+                                        className="flex-1 min-h-[220px] w-full text-sm text-slate-800 leading-relaxed border border-slate-200 rounded-xl px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400 bg-slate-50 placeholder-slate-300 transition-all duration-200 custom-scrollbar"
+                                    />
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs text-slate-400">{rawTranscript.length} characters</span>
+                                        {rawTranscript && (
+                                            <button
+                                                onClick={() => setRawTranscript('')}
+                                                className="text-xs text-red-400 hover:text-red-600 font-semibold transition-colors"
+                                            >
+                                                Clear
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Structured / Timed Segments */}
+                            {transcriptInputTab === 'structured' && (
+                                <div className="flex flex-col gap-2 flex-1 overflow-hidden">
+                                    <p className="text-xs text-slate-400">Add segments with timestamps and speaker labels.</p>
+                                    <div className="flex-1 overflow-y-auto space-y-2 max-h-[260px] pr-1 custom-scrollbar">
+                                        {structuredSegments.map((seg, idx) => (
+                                            <div key={idx} className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+                                                {/* Speaker + Time Row */}
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={seg.speaker}
+                                                        onChange={e => {
+                                                            const updated = [...structuredSegments];
+                                                            updated[idx].speaker = e.target.value;
+                                                            setStructuredSegments(updated);
+                                                        }}
+                                                        placeholder="Speaker"
+                                                        className="w-24 flex-shrink-0 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400 placeholder-slate-300"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        value={seg.start}
+                                                        onChange={e => {
+                                                            const updated = [...structuredSegments];
+                                                            updated[idx].start = e.target.value;
+                                                            setStructuredSegments(updated);
+                                                        }}
+                                                        placeholder="0.0s"
+                                                        className="w-16 flex-shrink-0 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400 placeholder-slate-300 text-center"
+                                                    />
+                                                    <span className="text-slate-300 self-center text-xs">–</span>
+                                                    <input
+                                                        type="text"
+                                                        value={seg.end}
+                                                        onChange={e => {
+                                                            const updated = [...structuredSegments];
+                                                            updated[idx].end = e.target.value;
+                                                            setStructuredSegments(updated);
+                                                        }}
+                                                        placeholder="5.0s"
+                                                        className="w-16 flex-shrink-0 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400 placeholder-slate-300 text-center"
+                                                    />
+                                                    <button
+                                                        onClick={() => setStructuredSegments(prev => prev.filter((_, i) => i !== idx))}
+                                                        className="ml-auto text-slate-300 hover:text-red-400 transition-colors"
+                                                        title="Remove segment"
+                                                    >
+                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                                    </button>
+                                                </div>
+                                                {/* Text */}
+                                                <textarea
+                                                    value={seg.text}
+                                                    onChange={e => {
+                                                        const updated = [...structuredSegments];
+                                                        updated[idx].text = e.target.value;
+                                                        setStructuredSegments(updated);
+                                                    }}
+                                                    placeholder="Spoken text for this segment…"
+                                                    rows={2}
+                                                    className="w-full text-xs text-slate-800 border border-slate-200 rounded-lg px-2 py-1.5 bg-white resize-none focus:outline-none focus:ring-1 focus:ring-violet-400 placeholder-slate-300"
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Add Segment Button */}
+                                    <button
+                                        onClick={() => setStructuredSegments(prev => [...prev, { speaker: `Speaker ${prev.length + 1}`, start: '', end: '', text: '' }])}
+                                        className="flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-violet-200 text-violet-600 text-xs font-bold hover:bg-violet-50 hover:border-violet-400 transition-all duration-200"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                                        Add Segment
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                 </div>
 
 

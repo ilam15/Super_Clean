@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-// import axios from 'axios'; // Keeping axios import as requested, even if unused for now
 
 const PreviewPage = () => {
     const location = useLocation();
-    const state = location.state || {}; // Fallback to empty object if no state
+    const state = location.state || {};
 
     const initialMetadata = state.metadata || {
         originalLanguage: 'Spanish',
@@ -12,19 +11,36 @@ const PreviewPage = () => {
         duration: '3:45',
         resolution: '1080p',
         status: 'Synced Successfully',
+        transcript: [
+            { speaker_no: 'SPEAKER_00', start_time: 0.0, end_time: 3.2, text: 'Welcome to the auto-dubbing demo.' },
+            { speaker_no: 'SPEAKER_01', start_time: 3.5, end_time: 7.1, text: 'This system translates speech in real time.' },
+            { speaker_no: 'SPEAKER_00', start_time: 7.4, end_time: 11.8, text: 'You can review and edit the transcript here.' },
+            { speaker_no: 'SPEAKER_01', start_time: 12.0, end_time: 15.5, text: 'Then download the final dubbed video.' },
+        ],
     };
 
     const videoUrls = {
         original: state.originalVideoUrl || 'https://www.w3schools.com/html/mov_bbb.mp4',
         dubbed: state.videoUrl || 'https://www.w3schools.com/html/movie.mp4'
     };
-    // State Management
+
+    // ── Core State ──────────────────────────────────────────────────
     const [isDubbed, setIsDubbed] = useState(true);
     const [isPlaying, setIsPlaying] = useState(false);
     const [metadata, setMetadata] = useState(initialMetadata);
-    const [pageLoaded, setPageLoaded] = useState(false); // For fade-in animation
-    const [videoLoading, setVideoLoading] = useState(false); // For video buffering state
-    const [toast, setToast] = useState({ show: false, message: '', type: 'success' }); // For notifications
+    const [pageLoaded, setPageLoaded] = useState(false);
+    const [videoLoading, setVideoLoading] = useState(false);
+    const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+
+    // ── Transcript State ─────────────────────────────────────────────
+    const [transcript, setTranscript] = useState(initialMetadata.transcript || []);
+    const [isEditMode, setIsEditMode] = useState(false);
+    const [editingIdx, setEditingIdx] = useState(null);
+    const [editDraft, setEditDraft] = useState('');
+    const [transcriptExpanded, setTranscriptExpanded] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [savedSnapshot, setSavedSnapshot] = useState(null); // for discard
+    const [copiedAll, setCopiedAll] = useState(false);
 
     const videoRef = useRef(null);
 
@@ -97,6 +113,14 @@ const PreviewPage = () => {
     };
 
     const navigate = useNavigate();
+
+    // Derived: filtered transcript for segment count subtitle
+    const filteredTranscript = searchQuery
+        ? transcript.filter(t =>
+            t.text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            t.speaker_no?.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+        : transcript;
 
     const handleBack = () => {
         console.log('Going back...');
@@ -189,29 +213,243 @@ const PreviewPage = () => {
                             </div>
                         </div>
 
-                        {/* Transcript Display */}
-                        {metadata.transcript && metadata.transcript.length > 0 && (
-                            <div className="bg-white rounded-3xl p-6 shadow-xl shadow-gray-100/50 border border-gray-100 mt-4 transition-all duration-500 hover:shadow-2xl hover:shadow-purple-100/50">
-                                <h3 className="font-bold text-gray-900 text-lg mb-4 flex items-center gap-2">
-                                    <span className="text-purple-600 text-xl">📝</span> Generated Transcript
-                                </h3>
-                                <div className="max-h-64 overflow-y-auto pr-3 space-y-3 custom-scrollbar">
-                                    {metadata.transcript.map((item, idx) => (
-                                        <div key={idx} className="p-4 rounded-2xl bg-gray-50/80 border border-gray-100 transition-colors duration-300 hover:border-purple-200 hover:bg-purple-50/50 group">
-                                            <div className="flex justify-between items-center mb-2">
-                                                <span className="text-xs font-bold text-purple-700 bg-purple-100/80 px-2.5 py-0.5 rounded-full tracking-wide">
-                                                    {item.speaker_no?.replace('SPEAKER_', 'Speaker ') || 'Speaker'}
-                                                </span>
-                                                <span className="text-xs font-semibold text-gray-400 font-mono tracking-tight group-hover:text-purple-400 transition-colors">
-                                                    {item.start_time?.toFixed(1)}s - {item.end_time?.toFixed(1)}s
-                                                </span>
-                                            </div>
-                                            <p className="text-sm text-gray-700 leading-relaxed font-medium">
-                                                {item.text || <span className="text-gray-400 italic">No speech detected</span>}
-                                            </p>
+                        {/* ═══ Generated Transcript ═══ */}
+                        {transcript.length > 0 && (
+                            <div className="bg-white rounded-3xl shadow-xl shadow-gray-100/50 border border-gray-100 mt-4 transition-all duration-500 hover:shadow-2xl hover:shadow-purple-100/50 overflow-hidden">
+
+                                {/* ── Header Bar ── */}
+                                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-purple-50/60 to-indigo-50/40">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-9 h-9 rounded-xl bg-purple-100 flex items-center justify-center text-purple-600 text-lg">📝</div>
+                                        <div>
+                                            <h3 className="font-bold text-gray-900 text-base leading-tight">Generated Transcript</h3>
+                                            <p className="text-xs text-gray-400 font-medium">{transcript.length} segments{searchQuery && ` · ${filteredTranscript.length} matches`}</p>
                                         </div>
-                                    ))}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {/* Copy All */}
+                                        <button
+                                            onClick={() => {
+                                                const text = transcript.map(t => `[${t.speaker_no?.replace('SPEAKER_', 'Speaker ')}] ${t.text}`).join('\n');
+                                                navigator.clipboard.writeText(text).then(() => {
+                                                    setCopiedAll(true);
+                                                    setTimeout(() => setCopiedAll(false), 2000);
+                                                });
+                                            }}
+                                            title="Copy all transcript"
+                                            className="p-2 rounded-xl text-gray-400 hover:text-purple-600 hover:bg-purple-50 transition-all duration-200"
+                                        >
+                                            {copiedAll
+                                                ? <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                                                : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-4 10h6a2 2 0 002-2v-8a2 2 0 00-2-2h-6a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                                            }
+                                        </button>
+
+                                        {/* Edit Mode Toggle */}
+                                        <button
+                                            onClick={() => {
+                                                if (!isEditMode) {
+                                                    setSavedSnapshot(JSON.parse(JSON.stringify(transcript)));
+                                                    setIsEditMode(true);
+                                                    setTranscriptExpanded(true);
+                                                } else {
+                                                    // Save & exit
+                                                    setIsEditMode(false);
+                                                    setEditingIdx(null);
+                                                    showToastMessage('Transcript saved ✅');
+                                                }
+                                            }}
+                                            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all duration-300 ${isEditMode
+                                                ? 'bg-green-100 text-green-700 hover:bg-green-200 ring-1 ring-green-300'
+                                                : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                                                }`}
+                                        >
+                                            {isEditMode
+                                                ? <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" /></svg>Save All</>
+                                                : <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>Edit</>
+                                            }
+                                        </button>
+
+                                        {/* Discard button (only in edit mode) */}
+                                        {isEditMode && (
+                                            <button
+                                                onClick={() => {
+                                                    if (savedSnapshot) setTranscript(savedSnapshot);
+                                                    setIsEditMode(false);
+                                                    setEditingIdx(null);
+                                                    showToastMessage('Changes discarded', 'error');
+                                                }}
+                                                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-red-50 text-red-500 hover:bg-red-100 transition-all duration-200 ring-1 ring-red-200"
+                                            >
+                                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
+                                                Discard
+                                            </button>
+                                        )}
+
+                                        {/* Expand / Collapse */}
+                                        <button
+                                            onClick={() => setTranscriptExpanded(p => !p)}
+                                            className="p-2 rounded-xl text-gray-400 hover:text-purple-600 hover:bg-purple-50 transition-all duration-200"
+                                        >
+                                            <svg className={`w-4 h-4 transition-transform duration-300 ${transcriptExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                                        </button>
+                                    </div>
                                 </div>
+
+                                {/* ── Search Bar (visible when expanded) ── */}
+                                {transcriptExpanded && (
+                                    <div className="px-6 pt-4">
+                                        <div className="relative">
+                                            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z" /></svg>
+                                            <input
+                                                type="text"
+                                                value={searchQuery}
+                                                onChange={e => setSearchQuery(e.target.value)}
+                                                placeholder="Search transcript…"
+                                                className="w-full pl-9 pr-4 py-2 text-sm rounded-xl border border-gray-200 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-purple-300 focus:border-purple-300 placeholder-gray-300 transition-all duration-200"
+                                            />
+                                            {searchQuery && (
+                                                <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* ── Segments List ── */}
+                                <div className={`transition-all duration-500 overflow-hidden ${transcriptExpanded ? 'max-h-[480px]' : 'max-h-0'}`}>
+                                    <div className="px-6 pb-6 pt-3 space-y-2.5 overflow-y-auto max-h-[420px] custom-scrollbar">
+                                        {(() => {
+                                            const filtered = searchQuery
+                                                ? transcript.filter(t =>
+                                                    t.text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                                    t.speaker_no?.toLowerCase().includes(searchQuery.toLowerCase())
+                                                )
+                                                : transcript;
+
+                                            if (filtered.length === 0) {
+                                                return (
+                                                    <div className="py-8 text-center">
+                                                        <p className="text-gray-400 text-sm">No segments match your search.</p>
+                                                    </div>
+                                                );
+                                            }
+
+                                            return filtered.map((item, idx) => {
+                                                const realIdx = transcript.indexOf(item);
+                                                const isEditing = editingIdx === realIdx;
+                                                const speakerColors = [
+                                                    'bg-purple-100 text-purple-700',
+                                                    'bg-blue-100 text-blue-700',
+                                                    'bg-teal-100 text-teal-700',
+                                                    'bg-orange-100 text-orange-700',
+                                                ];
+                                                const speakerNum = parseInt(item.speaker_no?.replace('SPEAKER_', '') || '0', 10);
+                                                const colorClass = speakerColors[speakerNum % speakerColors.length];
+
+                                                return (
+                                                    <div
+                                                        key={realIdx}
+                                                        className={`rounded-2xl border transition-all duration-300 ${isEditing
+                                                            ? 'border-purple-300 bg-purple-50/60 shadow-md shadow-purple-100'
+                                                            : 'border-gray-100 bg-gray-50/70 hover:border-purple-200 hover:bg-purple-50/40'
+                                                            }`}
+                                                    >
+                                                        {/* Segment Header */}
+                                                        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full tracking-wide ${colorClass}`}>
+                                                                    {item.speaker_no?.replace('SPEAKER_', 'Speaker ') || 'Speaker'}
+                                                                </span>
+                                                                <span className="text-xs text-gray-400 font-mono">
+                                                                    {item.start_time?.toFixed(1)}s – {item.end_time?.toFixed(1)}s
+                                                                </span>
+                                                            </div>
+                                                            {/* Per-segment Edit / Save / Cancel */}
+                                                            {isEditMode && (
+                                                                <div className="flex items-center gap-1.5">
+                                                                    {isEditing ? (
+                                                                        <>
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    const updated = [...transcript];
+                                                                                    updated[realIdx] = { ...updated[realIdx], text: editDraft };
+                                                                                    setTranscript(updated);
+                                                                                    setEditingIdx(null);
+                                                                                }}
+                                                                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-green-100 text-green-700 hover:bg-green-200 transition-colors"
+                                                                            >
+                                                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" /></svg>
+                                                                                Save
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => setEditingIdx(null)}
+                                                                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors"
+                                                                            >
+                                                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
+                                                                                Cancel
+                                                                            </button>
+                                                                        </>
+                                                                    ) : (
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                setEditingIdx(realIdx);
+                                                                                setEditDraft(item.text || '');
+                                                                            }}
+                                                                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-purple-600 bg-white border border-purple-200 hover:bg-purple-50 transition-colors"
+                                                                        >
+                                                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                                                            Edit
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        {/* Segment Text */}
+                                                        <div className="px-4 pb-3">
+                                                            {isEditing ? (
+                                                                <div>
+                                                                    <textarea
+                                                                        autoFocus
+                                                                        value={editDraft}
+                                                                        onChange={e => setEditDraft(e.target.value)}
+                                                                        rows={3}
+                                                                        className="w-full text-sm text-gray-800 leading-relaxed bg-white border border-purple-300 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-purple-400 placeholder-gray-300 transition-all duration-200"
+                                                                        placeholder="Enter transcript text…"
+                                                                    />
+                                                                    <p className="text-right text-xs text-gray-400 mt-1">{editDraft.length} chars</p>
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-sm text-gray-700 leading-relaxed font-medium">
+                                                                    {item.text
+                                                                        ? searchQuery
+                                                                            ? item.text.split(new RegExp(`(${searchQuery})`, 'gi')).map((part, i) =>
+                                                                                part.toLowerCase() === searchQuery.toLowerCase()
+                                                                                    ? <mark key={i} className="bg-yellow-200 text-yellow-900 rounded px-0.5">{part}</mark>
+                                                                                    : part
+                                                                            )
+                                                                            : item.text
+                                                                        : <span className="text-gray-400 italic">No speech detected</span>
+                                                                    }
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
+                                    </div>
+                                </div>
+
+                                {/* ── Footer Status Bar ── */}
+                                {isEditMode && (
+                                    <div className="px-6 py-3 bg-purple-50/80 border-t border-purple-100 flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse"></div>
+                                        <p className="text-xs text-purple-600 font-semibold">Edit mode active — click <strong>Edit</strong> on any segment to modify its text.</p>
+                                    </div>
+                                )}
                             </div>
                         )}
 

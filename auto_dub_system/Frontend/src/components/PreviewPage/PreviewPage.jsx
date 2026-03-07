@@ -23,6 +23,8 @@ const PreviewPage = () => {
         original: state.originalVideoUrl || 'https://www.w3schools.com/html/mov_bbb.mp4',
         dubbed: state.videoUrl || 'https://www.w3schools.com/html/movie.mp4'
     };
+    // downloadUrl is the S3 presigned URL if available, else same as videoUrls.dubbed
+    const downloadUrl = state.downloadUrl || videoUrls.dubbed;
 
     // ── Core State ──────────────────────────────────────────────────
     const [isDubbed, setIsDubbed] = useState(true);
@@ -41,6 +43,7 @@ const PreviewPage = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [savedSnapshot, setSavedSnapshot] = useState(null); // for discard
     const [copiedAll, setCopiedAll] = useState(false);
+    const [copiedLink, setCopiedLink] = useState(false);
 
     const videoRef = useRef(null);
 
@@ -76,40 +79,40 @@ const PreviewPage = () => {
     };
 
     // User Action Handlers
-    const handleDownload = async () => {
-        if (!videoUrls.dubbed) {
+    const handleDownload = () => {
+        if (!downloadUrl) {
             showToastMessage('No video available for download.', 'error');
             return;
         }
+        // Use window.open — the presigned URL has Content-Disposition: attachment
+        // so the browser downloads instead of streaming
+        showToastMessage('Download started! 📥');
+        window.open(downloadUrl, '_blank');
+    };
 
-        try {
-            showToastMessage('Download started! 📥');
-
-            const response = await fetch(videoUrls.dubbed);
-            if (!response.ok) throw new Error('Download failed');
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `dubbed_video_${Date.now()}.mp4`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            window.URL.revokeObjectURL(url);
-
-        } catch (error) {
-            console.error('Download error:', error);
-            // Fallback to direct link if fetch fails (e.g. CORS on placeholder)
-            const link = document.createElement('a');
-            link.href = videoUrls.dubbed;
-            link.download = `dubbed_video_${Date.now()}.mp4`;
-            link.target = '_blank';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+    const handleCopyLink = () => {
+        if (!downloadUrl) {
+            showToastMessage('No link available to copy.', 'error');
+            return;
         }
+        navigator.clipboard.writeText(downloadUrl)
+            .then(() => {
+                setCopiedLink(true);
+                showToastMessage('Link copied to clipboard! 🔗');
+                setTimeout(() => setCopiedLink(false), 2000);
+            })
+            .catch(() => {
+                // Fallback for browsers that block clipboard without HTTPS
+                const ta = document.createElement('textarea');
+                ta.value = downloadUrl;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                setCopiedLink(true);
+                showToastMessage('Link copied! 🔗');
+                setTimeout(() => setCopiedLink(false), 2000);
+            });
     };
 
     const navigate = useNavigate();
@@ -513,6 +516,27 @@ const PreviewPage = () => {
                                 <span className="absolute inset-0 w-full h-full bg-gradient-to-r from-gray-800 to-gray-900 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></span>
                                 <svg className="w-5 h-5 mr-3 relative z-10 group-hover:animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                                 <span className="relative z-10">Download Video</span>
+                            </button>
+
+                            {/* Copy Link Button */}
+                            <button
+                                onClick={handleCopyLink}
+                                className={`w-full flex justify-center items-center py-3.5 px-6 border-2 text-sm font-bold rounded-2xl transition-all duration-300 transform hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-offset-2 ${copiedLink
+                                        ? 'border-green-400 bg-green-50 text-green-700 focus:ring-green-400'
+                                        : 'border-purple-200 bg-white text-purple-700 hover:bg-purple-50 hover:border-purple-400 focus:ring-purple-400'
+                                    }`}
+                            >
+                                {copiedLink ? (
+                                    <>
+                                        <svg className="w-4 h-4 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" /></svg>
+                                        Copied!
+                                    </>
+                                ) : (
+                                    <>
+                                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                                        Copy Link
+                                    </>
+                                )}
                             </button>
 
                             <div className="grid grid-cols-2 gap-4">

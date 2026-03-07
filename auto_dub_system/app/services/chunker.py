@@ -383,6 +383,7 @@ class ChunkingManager:
             "-b:a", "192k",
             "-map", "0:v:0",    # Take first video stream from first input
             "-map", "1:a:0",    # Take first audio stream from second input (dubbed)
+            "-movflags", "+faststart",  # Move moov atom to start → browser starts playing immediately
             output_path
         ]
 

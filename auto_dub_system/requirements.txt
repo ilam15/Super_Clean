@@ -38,3 +38,4 @@ edge-tts
 # Utilities
 tqdm
 yt-dlp
+boto3

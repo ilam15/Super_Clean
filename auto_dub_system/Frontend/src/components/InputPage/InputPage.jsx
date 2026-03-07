@@ -429,17 +429,20 @@ const InputPage = () => {
                             setIsProcessing(false);
 
                             const result = statusData.result || {};
-                            // stage4 returns { final_video_path, status, job_id }
+                            // stage4 returns { final_video_path, presigned_url, status, job_id }
+                            // Prefer the S3 presigned URL; fall back to local /download/ endpoint
                             const finalVideoFile = result.final_video_path
                                 ? result.final_video_path.split(/[\\/]/).pop()
                                 : null;
-                            const outputVideoUrl = finalVideoFile
+                            const localDownloadUrl = finalVideoFile
                                 ? `/download/${encodeURIComponent(finalVideoFile)}`
                                 : '';
+                            const outputVideoUrl = result.presigned_url || localDownloadUrl;
 
                             navigate('/preview', {
                                 state: {
                                     videoUrl: outputVideoUrl,
+                                    downloadUrl: outputVideoUrl,  // explicit download URL
                                     originalVideoUrl: null,
                                     language: targetLanguage,
                                     gender: speakerGender,
